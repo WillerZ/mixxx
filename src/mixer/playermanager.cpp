@@ -6,6 +6,7 @@
 #include "control/controlobject.h"
 #include "effects/effectsmanager.h"
 #include "engine/channels/enginedeck.h"
+#include "engine/channels/enginedecksecondary.h"
 #include "engine/enginemixer.h"
 #include "library/library.h"
 #include "library/trackcollectionmanager.h"
@@ -393,6 +394,25 @@ void PlayerManager::addDeckInner() {
                 m_pEngine->registerChannelGroup(groupForDeckStem(deckIndex, i));
         pDeck->getEngineDeck()->addStemHandle(stemHandleGroup);
         m_pEffectsManager->addStem(stemHandleGroup);
+    }
+
+    // Create the secondary mixer channel for this deck. It carries the stems
+    // routed away from the primary channel (see EngineDeck::processStem). It
+    // is added right after the primary deck so that it is always processed
+    // after it.
+    {
+        ChannelHandleAndGroup secondaryHandleGroup =
+                m_pEngine->registerChannelGroup(groupForDeckSecondary(deckIndex));
+        EngineDeckSecondary* pSecondaryChannel = new EngineDeckSecondary(
+                secondaryHandleGroup,
+                pDeck->getEngineDeck(),
+                m_pEffectsManager,
+                deckIndex % 2 == 1 ? EngineChannel::RIGHT : EngineChannel::LEFT);
+        pSecondaryChannel->setMainMix(true);
+        pSecondaryChannel->setPfl(false);
+        m_pEngine->addChannel(std::unique_ptr<EngineChannel>(pSecondaryChannel));
+        // Setup equalizer and QuickEffect chain for the secondary channel.
+        m_pEffectsManager->addDeck(secondaryHandleGroup);
     }
 #endif
 

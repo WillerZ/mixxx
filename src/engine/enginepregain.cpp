@@ -28,6 +28,9 @@ EnginePregain::EnginePregain(const QString& group)
           m_dNonScratchSpeed(1.0),
           m_scratching(false),
           m_fPrevGain(1.0),
+          m_lastGainFrom(1.0),
+          m_lastGainTo(1.0),
+          m_lastScratchSplit(false),
           m_bSmoothFade(false) {
     m_pPotmeterPregain = new ControlAudioTaperPot(ConfigKey(group, "pregain"), -12, 12, 0.5);
     //Replay Gain things
@@ -146,7 +149,8 @@ void EnginePregain::process(CSAMPLE* pInOut, const std::size_t bufferSize) {
     }
     totalGain *= static_cast<CSAMPLE_GAIN>(speedGain);
 
-    if ((m_dSpeed * m_dOldSpeed < 0) && m_scratching) {
+    const bool bScratchSplit = (m_dSpeed * m_dOldSpeed < 0) && m_scratching;
+    if (bScratchSplit) {
         // direction changed, go though zero if scratching
         SampleUtil::applyRampingGain(&pInOut[0], m_fPrevGain, 0, bufferSize / 2);
         SampleUtil::applyRampingGain(&pInOut[bufferSize / 2], 0, totalGain, bufferSize / 2);
@@ -159,7 +163,23 @@ void EnginePregain::process(CSAMPLE* pInOut, const std::size_t bufferSize) {
         // SampleUtil deals with aliased buffers and gains of 1 or 0.
         SampleUtil::applyGain(pInOut, totalGain, bufferSize);
     }
+    m_lastGainFrom = m_fPrevGain;
+    m_lastGainTo = totalGain;
+    m_lastScratchSplit = bScratchSplit;
     m_fPrevGain = totalGain;
+}
+
+void EnginePregain::applyLastGain(CSAMPLE* pBuffer, const std::size_t bufferSize) const {
+    // Re-apply the exact same gain curve as the last process() call to a
+    // second output buffer.
+    if (m_lastScratchSplit) {
+        SampleUtil::applyRampingGain(&pBuffer[0], m_lastGainFrom, 0, bufferSize / 2);
+        SampleUtil::applyRampingGain(&pBuffer[bufferSize / 2], 0, m_lastGainTo, bufferSize / 2);
+    } else if (m_lastGainTo != m_lastGainFrom) {
+        SampleUtil::applyRampingGain(pBuffer, m_lastGainFrom, m_lastGainTo, bufferSize);
+    } else {
+        SampleUtil::applyGain(pBuffer, m_lastGainTo, bufferSize);
+    }
 }
 
 void EnginePregain::collectFeatures(GroupFeatureState* pGroupFeatures) const {

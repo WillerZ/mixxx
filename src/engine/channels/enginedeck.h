@@ -72,6 +72,11 @@ class EngineDeck : public EngineChannel, public AudioDestination {
     void cloneStemState(const EngineDeck* deckToClone);
     void addStemHandle(const ChannelHandleAndGroup& stemHandleGroup);
     static QString getGroupForStem(QStringView deckGroup, int stemIdx);
+
+    // The sum of the stems routed to the secondary channel, filled by
+    // processStem() in the same engine callback and read by the paired
+    // EngineDeckSecondary channel.
+    const CSAMPLE* altOutput() const;
 #endif
 
   signals:
@@ -100,9 +105,14 @@ class EngineDeck : public EngineChannel, public AudioDestination {
 #ifdef __STEM__
     // Stem buffer used to retrieve all the channel to mix together
     mixxx::SampleBuffer m_stemBuffer;
+    // Sum of the stems routed to the secondary channel. Filled by
+    // processStem() and read by the paired EngineDeckSecondary channel.
+    mixxx::SampleBuffer m_altOutput;
     std::unique_ptr<ControlObject> m_pStemCount;
     std::vector<std::unique_ptr<ControlPotmeter>> m_stemGain;
     std::vector<std::unique_ptr<ControlPushButton>> m_stemMute;
+    // Per-stem routing toggle: 0 = primary channel, 1 = secondary channel
+    std::vector<std::unique_ptr<ControlPushButton>> m_stemAltChannel;
     std::vector<std::unique_ptr<EngineVuMeter>> m_stemVuMeter;
     bool m_stemClonedState;
 #endif

@@ -12,7 +12,25 @@
 #include "moc_enginedeck.cpp"
 #include "track/track.h"
 #include "util/assert.h"
+#include "util/defs.h"
 #include "util/sample.h"
+
+namespace {
+
+#ifdef __STEM__
+// Zero a single stereo slot of an interleaved multichannel buffer. The
+// frames of the slot are not contiguous: frame i occupies the samples
+// i * channelCount + channelOffset and + 1.
+void clearStereoSlot(
+        CSAMPLE* pBuffer, SINT numFrames, int channelCount, int channelOffset) {
+    for (SINT i = 0; i < numFrames; i++) {
+        pBuffer[i * channelCount + channelOffset] = CSAMPLE_ZERO;
+        pBuffer[i * channelCount + channelOffset + 1] = CSAMPLE_ZERO;
+    }
+}
+#endif
+
+} // namespace
 
 EngineDeck::EngineDeck(
         const ChannelHandleAndGroup& handleGroup,
@@ -26,6 +44,7 @@ EngineDeck::EngineDeck(
                   primaryDeck),
           m_pConfig(pConfig),
 #ifdef __STEM__
+          m_altOutput(kMaxEngineSamples),
           m_stemClonedState(false),
 #endif
           m_pInputConfigured(new ControlObject(ConfigKey(getGroup(), "input_configured"))),
@@ -68,6 +87,7 @@ EngineDeck::EngineDeck(
 
     m_stemGain.reserve(mixxx::kMaxSupportedStems);
     m_stemMute.reserve(mixxx::kMaxSupportedStems);
+    m_stemAltChannel.reserve(mixxx::kMaxSupportedStems);
     m_stemVuMeter.reserve(mixxx::kMaxSupportedStems);
     for (int stemIdx = 0; stemIdx < mixxx::kMaxSupportedStems; stemIdx++) {
         m_stemGain.emplace_back(std::make_unique<ControlPotmeter>(
@@ -81,6 +101,11 @@ EngineDeck::EngineDeck(
                 ConfigKey(getGroupForStem(getGroup(), stemIdx), QStringLiteral("mute")));
         pMuteButton->setButtonMode(mixxx::control::ButtonMode::PowerWindow);
         m_stemMute.push_back(std::move(pMuteButton));
+        // Routes the stem to the secondary channel of this deck when set
+        auto pAltChannelButton = std::make_unique<ControlPushButton>(
+                ConfigKey(getGroupForStem(getGroup(), stemIdx), QStringLiteral("alt_channel")));
+        pAltChannelButton->setButtonMode(mixxx::control::ButtonMode::Toggle);
+        m_stemAltChannel.push_back(std::move(pAltChannelButton));
 
         m_stemVuMeter.emplace_back(std::make_unique<EngineVuMeter>(
                 getGroupForStem(getGroup(), stemIdx), QString(), false));
@@ -100,6 +125,7 @@ void EngineDeck::slotTrackLoaded(TrackPointer pNewTrack,
         for (int stemIdx = 0; stemIdx < mixxx::kMaxSupportedStems; stemIdx++) {
             m_stemGain[stemIdx]->set(1.0);
             m_stemMute[stemIdx]->set(0.0);
+            m_stemAltChannel[stemIdx]->set(0.0);
         }
     }
     m_stemClonedState = false;
@@ -131,9 +157,10 @@ void EngineDeck::processStem(CSAMPLE* pOut, const std::size_t bufferSize) {
     mixxx::audio::ChannelCount chCount = m_pBuffer->getChannelCount();
     VERIFY_OR_DEBUG_ASSERT(m_stems.size() <= chCount &&
             m_stemMute.size() <= chCount && m_stemGain.size() <= chCount &&
-            m_stemVuMeter.size() <= chCount) {
+            m_stemVuMeter.size() <= chCount && m_stemAltChannel.size() <= chCount) {
         return;
     };
+    CSAMPLE* pAltOut = m_altOutput.data();
     mixxx::audio::SampleRate sampleRate = mixxx::audio::SampleRate::fromDouble(m_sampleRate.get());
     unsigned int stemCount = chCount / mixxx::kEngineChannelOutputCount;
     SINT numFrames = bufferSize / mixxx::kEngineChannelOutputCount;
@@ -191,17 +218,28 @@ void EngineDeck::processStem(CSAMPLE* pOut, const std::size_t bufferSize) {
 
         m_stemVuMeter[stemIdx]->process(pOut, bufferSize);
 
-        // Put back the stem frames into the steam buffer (LRLR -> LR......LR......)
-        SampleUtil::insertStereoToMulti(
-                pIn,
-                pOut,
-                numFrames,
-                chCount,
-                chOffset);
+        if (m_stemAltChannel[stemIdx]->toBool()) {
+            // Add the stem to the secondary channel output and remove it from
+            // the multichannel buffer so the final downmix excludes it.
+            SampleUtil::add(pAltOut, pOut, bufferSize);
+            clearStereoSlot(pIn, numFrames, static_cast<int>(chCount), chOffset);
+        } else {
+            // Put back the stem frames into the steam buffer (LRLR -> LR......LR......)
+            SampleUtil::insertStereoToMulti(
+                    pIn,
+                    pOut,
+                    numFrames,
+                    chCount,
+                    chOffset);
+        }
     }
 
     // Mixxx all the stem tracks together
     SampleUtil::mixMultichannelToStereo(pOut, pIn, numFrames, chCount);
+}
+
+const CSAMPLE* EngineDeck::altOutput() const {
+    return m_altOutput.data();
 }
 
 void EngineDeck::cloneStemState(const EngineDeck* deckToClone) {
@@ -214,19 +252,28 @@ void EngineDeck::cloneStemState(const EngineDeck* deckToClone) {
     }
     VERIFY_OR_DEBUG_ASSERT(m_stemGain.size() == mixxx::kMaxSupportedStems &&
             m_stemMute.size() == mixxx::kMaxSupportedStems &&
+            m_stemAltChannel.size() == mixxx::kMaxSupportedStems &&
             deckToClone->m_stemGain.size() == mixxx::kMaxSupportedStems &&
-            deckToClone->m_stemMute.size() == mixxx::kMaxSupportedStems) {
+            deckToClone->m_stemMute.size() == mixxx::kMaxSupportedStems &&
+            deckToClone->m_stemAltChannel.size() == mixxx::kMaxSupportedStems) {
         return;
     }
     for (int stemIdx = 0; stemIdx < mixxx::kMaxSupportedStems; stemIdx++) {
         m_stemGain[stemIdx]->set(deckToClone->m_stemGain[stemIdx]->get());
         m_stemMute[stemIdx]->set(deckToClone->m_stemMute[stemIdx]->get());
+        m_stemAltChannel[stemIdx]->set(deckToClone->m_stemAltChannel[stemIdx]->get());
     }
     m_stemClonedState = true;
 }
 #endif
 
 void EngineDeck::process(CSAMPLE* pOut, const std::size_t bufferSize) {
+#ifdef __STEM__
+    // The stems routed to the secondary channel are summed here. Clear the
+    // buffer before processing so that nothing leaks into it on the
+    // passthrough, non-stem and early-return paths.
+    m_altOutput.clear(bufferSize);
+#endif
     // Feed the incoming audio through if passthrough is active
     const CSAMPLE* sampleBuffer = m_sampleBuffer; // save pointer on stack
     if (isPassthroughActive() && sampleBuffer) {
@@ -260,6 +307,11 @@ void EngineDeck::process(CSAMPLE* pOut, const std::size_t bufferSize) {
 
     // Apply pregain
     m_pPregain->process(pOut, bufferSize);
+#ifdef __STEM__
+    // Apply the same pregain curve to the secondary channel output so both
+    // outputs stay sample-identical.
+    m_pPregain->applyLastGain(m_altOutput.data(), bufferSize);
+#endif
 
     EngineEffectsManager* pEngineEffectsManager = m_pEffectsManager->getEngineEffectsManager();
     if (pEngineEffectsManager != nullptr) {

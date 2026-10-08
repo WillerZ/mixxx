@@ -168,6 +168,13 @@ class PlayerManager : public PlayerManagerInterface {
         return channel.chopped(1) +
                 QStringLiteral("_Stem") + QChar('1' + stemIdx) + QChar(']');
     }
+
+    // Returns the group for the secondary channel of the ith deck where i is zero indexed
+    static QString groupForDeckSecondary(int deckIdx) {
+        DEBUG_ASSERT(deckIdx >= 0);
+        return QStringLiteral("[Channel") + QString::number(deckIdx + 1) +
+                QStringLiteral("Secondary]");
+    }
 #endif
 
     // Returns the group for the ith PreviewDeck where i is zero indexed

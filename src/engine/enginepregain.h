@@ -25,6 +25,11 @@ class EnginePregain : public EngineObject {
 
     void process(CSAMPLE* pInOut, const std::size_t bufferSize) override;
 
+    // Applies the exact same gain curve as the last process() call to another
+    // buffer. Used to apply the same pregain to the secondary output of a
+    // stem deck so both outputs stay sample-identical.
+    void applyLastGain(CSAMPLE* pBuffer, const std::size_t bufferSize) const;
+
     void collectFeatures(GroupFeatureState* pGroupFeatures) const override;
 
   private:
@@ -33,6 +38,10 @@ class EnginePregain : public EngineObject {
     double m_dNonScratchSpeed;
     bool m_scratching;
     CSAMPLE_GAIN m_fPrevGain;
+    // The gain curve applied by the last process() call.
+    CSAMPLE_GAIN m_lastGainFrom;
+    CSAMPLE_GAIN m_lastGainTo;
+    bool m_lastScratchSplit;
     ControlAudioTaperPot* m_pPotmeterPregain;
     ControlObject* m_pTotalGain;
     ControlObject* m_pCOReplayGain;

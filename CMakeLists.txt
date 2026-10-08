@@ -2906,6 +2906,7 @@ if(STEM)
   target_sources(
     mixxx-lib
     PRIVATE
+      src/engine/channels/enginedecksecondary.cpp
       src/sources/soundsourcestem.cpp
       src/track/steminfoimporter.cpp
       src/track/steminfo.cpp
