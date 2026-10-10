@@ -1069,15 +1069,21 @@ const mixerStrip = function(deckNumber, deckAltNumber, midiOffset) {
         },
     });
 
-    // VU Meters (lights and levels: see SCLive4.meterMask)
-    this.vuMeter = new components.Component({
-        midi: [0xB0 + midiOffset, 0x0A],
-        group: `[Channel${deckNumber}]`,
-        outKey: "vu_meter",
-        output: function(value, group) {
-            this.send(SCLive4.meterMask(value, engine.getValue(group, "peak_indicator") === 1));
-        },
-    });
+    // VU Meters (see SCLive4.meterMask). Since we have 2 mixer channels per
+    // strip, one primary and one secondary, we show the greater of the two.
+    const primaryGroup = `[Channel${deckNumber}]`;
+    const secondaryGroup = `[Channel${deckAltNumber}Secondary]`;
+    const sendVuMeter = function() {
+        const level = Math.max(engine.getValue(primaryGroup, "vu_meter"),
+            engine.getValue(secondaryGroup, "vu_meter"));
+        const peak = engine.getValue(primaryGroup, "peak_indicator") === 1 ||
+            engine.getValue(secondaryGroup, "peak_indicator") === 1;
+        midi.sendShortMsg(0xB0 + midiOffset, 0x0A, SCLive4.meterMask(level, peak));
+    };
+    this.vuMeter = [
+        engine.makeConnection(primaryGroup, "vu_meter", sendVuMeter),
+        engine.makeConnection(secondaryGroup, "vu_meter", sendVuMeter),
+    ];
 
     // Sweep FX knob: shapes the channel's Sweep FX (chosen with the Sweep FX
     // buttons, see SCLive4.shapeSweepFx). Remembers its position so switching
