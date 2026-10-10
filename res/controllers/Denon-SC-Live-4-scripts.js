@@ -475,10 +475,10 @@ SCLive4.init = function(_id, _debug) {
     });
 
     // Initialize mixer channel strips
-    SCLive4.mixerA = new mixerStrip(1, 0);
-    SCLive4.mixerB = new mixerStrip(2, 1);
-    SCLive4.mixerC = new mixerStrip(3, 2);
-    SCLive4.mixerD = new mixerStrip(4, 3);
+    SCLive4.mixerA = new mixerStrip(1, 3, 0);
+    SCLive4.mixerB = new mixerStrip(2, 4, 1);
+    SCLive4.mixerC = new mixerStrip(3, 1, 2);
+    SCLive4.mixerD = new mixerStrip(4, 2, 3);
 
     // Press down on the library encoder, acts as 'Enter' key in Mixxx library
     // Browse knob press: open / select. SHIFT + press: add the highlighted
@@ -624,40 +624,43 @@ SCLive4.init = function(_id, _debug) {
         if (!name) {
             return;
         }
-        const chain = `[QuickEffectRack1_[Channel${ch}]]`;
-        const effect = `[QuickEffectRack1_[Channel${ch}]_Effect1]`;
-        const turn = Math.min(1, Math.abs(knobValue - 0.5) * 2); // 0 center .. 1 end
-        const left = knobValue < 0.5;
-        if (name !== "filter" && !sweepFxCustom) {
-            // Mixxx's built-in Echo and White Noise link a setting (send /
-            // dry-wet) to the preset's knob, which starts at 0. Keep that knob
-            // fully up so those settings stay where the mapping puts them.
-            engine.setParameter(chain, "super1", 1);
-        }
-        if (name === "filter" || sweepFxCustom) {
-            engine.setValue(chain, "mix", 1);
-            engine.setParameter(chain, "super1", knobValue);
-        } else if (name === "noise") {
-            engine.setValue(chain, "mix_mode", 1);
-            engine.setValue(effect, "parameter1", 1); // pure noise, added on top
-            engine.setValue(chain, "mix", turn * sweepFxMix.noise);
-        } else if (name === "echo") {
-            engine.setValue(chain, "mix_mode", 1);
-            engine.setValue(effect, "parameter1", 0.5 * Math.pow(2, left ? -turn : turn)); // 1/4 .. 1 beat
-            engine.setValue(effect, "parameter2", 0.3 + 0.6 * turn);                        // more repeats
-            engine.setValue(effect, "parameter3", 0);
-            engine.setValue(effect, "parameter4", 1);
-            engine.setValue(effect, "parameter5", 1);
-            engine.setValue(chain, "mix", turn * sweepFxMix.echo);
-        } else if (name === "wash") {
-            engine.setValue(chain, "mix_mode", 0);
-            engine.setValue(effect, "parameter1", left ? 1 : 0.5); // 1 beat left, 1/2 beat right
-            engine.setValue(effect, "parameter2", 0.6);
-            engine.setValue(effect, "parameter3", 0);
-            engine.setValue(effect, "parameter4", 1);
-            engine.setValue(effect, "parameter5", 1);
-            engine.setValue(chain, "mix", turn);
-        }
+        const channels = [`Channel${ch}`, `Channel${1 + (ch + 1) % 4}Secondary`];
+        channels.forEach(channel => {
+            const chain = `[QuickEffectRack1_[${channel}]]`;
+            const effect = `[QuickEffectRack1_[${channel}]_Effect1]`;
+            const turn = Math.min(1, Math.abs(knobValue - 0.5) * 2); // 0 center .. 1 end
+            const left = knobValue < 0.5;
+            if (name !== "filter" && !sweepFxCustom) {
+                // Mixxx's built-in Echo and White Noise link a setting (send /
+                // dry-wet) to the preset's knob, which starts at 0. Keep that knob
+                // fully up so those settings stay where the mapping puts them.
+                engine.setParameter(chain, "super1", 1);
+            }
+            if (name === "filter" || sweepFxCustom) {
+                engine.setValue(chain, "mix", 1);
+                engine.setParameter(chain, "super1", knobValue);
+            } else if (name === "noise") {
+                engine.setValue(chain, "mix_mode", 1);
+                engine.setValue(effect, "parameter1", 1); // pure noise, added on top
+                engine.setValue(chain, "mix", turn * sweepFxMix.noise);
+            } else if (name === "echo") {
+                engine.setValue(chain, "mix_mode", 1);
+                engine.setValue(effect, "parameter1", 0.5 * Math.pow(2, left ? -turn : turn)); // 1/4 .. 1 beat
+                engine.setValue(effect, "parameter2", 0.3 + 0.6 * turn);                        // more repeats
+                engine.setValue(effect, "parameter3", 0);
+                engine.setValue(effect, "parameter4", 1);
+                engine.setValue(effect, "parameter5", 1);
+                engine.setValue(chain, "mix", turn * sweepFxMix.echo);
+            } else if (name === "wash") {
+                engine.setValue(chain, "mix_mode", 0);
+                engine.setValue(effect, "parameter1", left ? 1 : 0.5); // 1 beat left, 1/2 beat right
+                engine.setValue(effect, "parameter2", 0.6);
+                engine.setValue(effect, "parameter3", 0);
+                engine.setValue(effect, "parameter4", 1);
+                engine.setValue(effect, "parameter5", 1);
+                engine.setValue(chain, "mix", turn);
+            }
+        });
     };
 
     // Start with Filter selected, as Engine OS does (with the knobs at center,
@@ -1019,10 +1022,10 @@ SCLive4.shutdown = function() {
 };
 
 // All components contained in each mixer strip
-const mixerStrip = function(deckNumber, midiOffset) {
+const mixerStrip = function(deckNumber, deckAltNumber, midiOffset) {
     components.Deck.call(this, deckNumber);
 
-    // Gain Knob
+    // Gain Knob (Secondry channel doesn't have this)
     this.gain = new components.Pot({
         midi: [0xB0 + midiOffset, 0x03],
         group: `[Channel${deckNumber}]`,
@@ -1035,6 +1038,11 @@ const mixerStrip = function(deckNumber, midiOffset) {
         midi: [0xB0 + midiOffset, 0x04],
         group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
         inKey: "parameter3",
+        input: function(channel, control, value, status, group) {
+            const newValue = this.inValueScale(value);
+            components.Pot.prototype.input.call(this, channel, control, value, status, group);
+            engine.setValue(`[EqualizerRack1_[Channel${deckAltNumber}Secondary]_Effect1]`, "parameter3", newValue);
+        },
     });
 
     // Mid EQ Knob
@@ -1042,6 +1050,11 @@ const mixerStrip = function(deckNumber, midiOffset) {
         midi: [0xB0 + midiOffset, 0x06],
         group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
         inKey: "parameter2",
+        input: function(channel, control, value, status, group) {
+            const newValue = this.inValueScale(value);
+            components.Pot.prototype.input.call(this, channel, control, value, status, group);
+            engine.setValue(`[EqualizerRack1_[Channel${deckAltNumber}Secondary]_Effect1]`, "parameter2", newValue);
+        },
     });
 
     // Low EQ Knob
@@ -1049,6 +1062,11 @@ const mixerStrip = function(deckNumber, midiOffset) {
         midi: [0xB0 + midiOffset, 0x08],
         group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
         inKey: "parameter1",
+        input: function(channel, control, value, status, group) {
+            const newValue = this.inValueScale(value);
+            components.Pot.prototype.input.call(this, channel, control, value, status, group);
+            engine.setValue(`[EqualizerRack1_[Channel${deckAltNumber}Secondary]_Effect1]`, "parameter1", newValue);
+        },
     });
 
     // VU Meters (lights and levels: see SCLive4.meterMask)
@@ -1083,6 +1101,10 @@ const mixerStrip = function(deckNumber, midiOffset) {
         // values still show as lit on most channels.
         on: 0x7F,
         off: 0x00,
+        input: function(channel, control, value, status, group) {
+            components.Button.prototype.input.call(this, channel, control, value, status, group);
+            engine.setValue(`[Channel${deckAltNumber}Secondary]`, "pfl", components.Button.prototype.inGetValue.call(this));
+        },
     });
 
     // Volume Fader. No soft takeover: the SC Live 4 can't report fader
@@ -1095,10 +1117,12 @@ const mixerStrip = function(deckNumber, midiOffset) {
             const newValue = this.inValueScale(value);
             const oldValue = this.lastValue !== undefined ? this.lastValue : engine.getParameter(this.group, "volume");
             this.lastValue = newValue; // physical fader position
-            if (SCLive4.faderEcho.fader(deckNumber, newValue, oldValue)) {
-                return; // Fader Echo is holding this channel open
+            if (!SCLive4.faderEcho.fader(deckNumber, newValue, oldValue)) {
+                components.Pot.prototype.input.call(this, channel, control, value, status, group);
             }
-            components.Pot.prototype.input.call(this, channel, control, value, status, group);
+            if (!SCLive4.faderEcho.fader(deckAltNumber, newValue, oldValue)) {
+                engine.setValue(`[Channel${deckAltNumber}Secondary]`, "volume", newValue);
+            }
         },
     });
 
@@ -1108,6 +1132,7 @@ const mixerStrip = function(deckNumber, midiOffset) {
         inKey: "orientation",
         input: function(_channel, _control, value, _status, _group) {
             this.inSetValue(value);
+            engine.setValue(`[Channel${deckAltNumber}Secondary]`, "orientation", value);
         },
     });
 
@@ -1813,7 +1838,8 @@ SCLive4.PadSection = function(deck, offset) {
     try {
         // This will throw if Mixxx was built without stems
         engine.getValue("[Channel1]", "stem_count");
-    } catch {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (error) {
         // Stems not available:
         this.mixxHasStems = false;
     }
@@ -2047,7 +2073,8 @@ SCLive4.stemsMode = function(deck, offset) {
     this.ledControl = SCLive4.padMode.HOTCUE;
     this.colorUnMute = SCLive4.rgbCode.blue;
     this.colorMute = SCLive4.rgbCode.blueDark;
-    this.colorDisabled = SCLive4.rgbCode.black;
+    this.colorMain = SCLive4.rgbCode.green;
+    this.colorAlt = SCLive4.rgbCode.red;
     this.pads = new components.ComponentContainer();
     this.groupPrefix = `[Channel${script.deckFromGroup(deck.currentDeck)}_Stem`;
     for (let i = 1; i <= 4; i++) {
@@ -2065,25 +2092,38 @@ SCLive4.stemsMode = function(deck, offset) {
         });
     }
 
-    this.onEnter = function() {
-        for (let i = 5; i <= 8; i++) {
-            midi.sendShortMsg(0x94 + this.offset, 0x0E + i, SCLive4.paletteFromRGB(this.colorDisabled));
-        }
-    };
+    for (let i = 5; i <= 8; i++) {
+        this.pads[i] = new components.Button({
+            type: components.Button.prototype.types.toggle,
+            group: `${this.groupPrefix}${9 - i}]`,
+            key: "alt_channel",
+            midi: [0x94 + offset, 0x0E + i],
+            sendRGB: function(colorObj) {
+                midi.sendShortMsg(0x94 + offset, 0x0E + i, SCLive4.paletteFromRGB(colorObj));
+            },
+            on: this.colorAlt,
+            off: this.colorMain,
+            outConnect: false,
+        });
+    }
 
-    this.onParameter = function(direction, _shifted) {
+    this.onParameter = function(direction, shifted) {
+        let target = "mute";
+        if (shifted) {
+            target = "alt_channel";
+        }
         if (direction > 0) {
-            // Instant instrumental
-            engine.setValue(`${this.groupPrefix}1]`, "mute", 0);
-            engine.setValue(`${this.groupPrefix}2]`, "mute", 0);
-            engine.setValue(`${this.groupPrefix}3]`, "mute", 0);
-            engine.setValue(`${this.groupPrefix}4]`, "mute", 1);
+            // Instant instrumental (shift => main instrumental, alt vocal)
+            engine.setValue(`${this.groupPrefix}1]`, target, 0);
+            engine.setValue(`${this.groupPrefix}2]`, target, 0);
+            engine.setValue(`${this.groupPrefix}3]`, target, 0);
+            engine.setValue(`${this.groupPrefix}4]`, target, 1);
         } else {
-            // Instant vocal
-            engine.setValue(`${this.groupPrefix}1]`, "mute", 1);
-            engine.setValue(`${this.groupPrefix}2]`, "mute", 1);
-            engine.setValue(`${this.groupPrefix}3]`, "mute", 1);
-            engine.setValue(`${this.groupPrefix}4]`, "mute", 0);
+            // Instant vocal (shift => main vocal, alt instrumental)
+            engine.setValue(`${this.groupPrefix}1]`, target, 1);
+            engine.setValue(`${this.groupPrefix}2]`, target, 1);
+            engine.setValue(`${this.groupPrefix}3]`, target, 1);
+            engine.setValue(`${this.groupPrefix}4]`, target, 0);
         }
     };
 };
