@@ -582,13 +582,15 @@ SCLive4.init = function(_id, _debug) {
         const mixers = [SCLive4.mixerA, SCLive4.mixerB, SCLive4.mixerC, SCLive4.mixerD];
         const position = name === "wash" && !sweepFxCustom ? sweepFxPresets.echo : sweepFxPresets[name]; // Default Wash is built on Echo
         for (let ch = 1; ch <= 4; ch++) {
-            const group = `[QuickEffectRack1_[Channel${ch}]]`;
-            if (!name) {
-                engine.setValue(group, "enabled", 0); // no sweep effect
-                continue;
-            }
-            engine.setValue(group, "loaded_chain_preset", position);
-            engine.setValue(group, "enabled", 1);
+            const groups = [`[QuickEffectRack1_[Channel${ch}]]`, `[QuickEffectRack1_[Channel${ch}Secondary]]`];
+            groups.forEach(group => {
+                if (!name) {
+                    engine.setValue(group, "enabled", 0); // no sweep effect
+                } else {
+                    engine.setValue(group, "loaded_chain_preset", position);
+                    engine.setValue(group, "enabled", 1);
+                }
+            });
         }
         // Loading a preset resets its settings a moment later, so apply the
         // knob positions afterward (center if a knob hasn't moved yet). This
@@ -625,8 +627,8 @@ SCLive4.init = function(_id, _debug) {
         if (!name) {
             return;
         }
-        const channels = [`Channel${ch}`, `Channel${1 + (ch + 1) % 4}Secondary`];
-        channels.forEach(channel => {
+        const channels = [[`Channel${ch}`, `Channel${ch}`], [`Channel${1 + (ch + 1) % 4}Secondary`, `Channel${1 + (ch + 1) % 4}`]];
+        channels.forEach(([channel, deck]) => {
             const chain = `[QuickEffectRack1_[${channel}]]`;
             const effect = `[QuickEffectRack1_[${channel}]_Effect1]`;
             const turn = Math.min(1, Math.abs(knobValue - 0.5) * 2); // 0 center .. 1 end
@@ -643,7 +645,14 @@ SCLive4.init = function(_id, _debug) {
             } else if (name === "noise") {
                 engine.setValue(chain, "mix_mode", 1);
                 engine.setValue(effect, "parameter1", 1); // pure noise, added on top
-                engine.setValue(chain, "mix", turn * sweepFxMix.noise);
+                // Don't add effect noise to non-playing decks
+                if (engine.getValue(`[${deck}]`, "play")) {
+                    // We simulate pre-fader noise by multiplying in the channel volume
+                    const volume = engine.getValue(`[${channel}]`, "volume");
+                    engine.setValue(chain, "mix", turn * sweepFxMix.noise * volume);
+                } else {
+                    engine.setValue(chain, "mix", 0);
+                }
             } else if (name === "echo") {
                 engine.setValue(chain, "mix_mode", 1);
                 engine.setValue(effect, "parameter1", 0.5 * Math.pow(2, left ? -turn : turn)); // 1/4 .. 1 beat
@@ -723,7 +732,8 @@ SCLive4.init = function(_id, _debug) {
             const target = beatFxAssign[value];
             beatFxUnits.forEach(unit => {
                 for (let ch = 1; ch <= 4; ch++) {
-                    engine.setValue(unit, `group_[Channel${ch}]_enable`, target === ch ? 1 : 0);
+                    const channels = [`Channel${ch}`, `Channel${1 + (ch + 1) % 4}Secondary`];
+                    channels.forEach(channel => { engine.setValue(unit, `group_[${channel}]_enable`, target === ch ? 1 : 0); });
                 }
                 engine.setValue(unit, "group_[Master]_enable", target === "M" ? 1 : 0);
             });
@@ -969,6 +979,7 @@ SCLive4.init = function(_id, _debug) {
     if (channelVolumesToZeroOnStartup) {
         for (let i = 1; i <= 4; i++) {
             engine.setValue(`[Channel${i}]`, "volume", 0);
+            engine.setValue(`[Channel${i}Secondary]`, "volume", 0);
         }
     }
 
@@ -1124,6 +1135,10 @@ const mixerStrip = function(deckNumber, deckAltNumber, midiOffset) {
             const newValue = this.inValueScale(value);
             const oldValue = this.lastValue !== undefined ? this.lastValue : engine.getParameter(this.group, "volume");
             this.lastValue = newValue; // physical fader position
+            // We need to re-invoke shapeSweepFx so it can simulate pre-fader noise
+            const mixers = [SCLive4.mixerA, SCLive4.mixerB, SCLive4.mixerC, SCLive4.mixerD];
+            const sweepKnob= mixers[deckNumber - 1] && mixers[deckNumber - 1].filterKnob;
+            SCLive4.shapeSweepFx(deckNumber, sweepKnob && sweepKnob.lastValue !== undefined ? sweepKnob.lastValue : 0.5);
             if (!SCLive4.faderEcho.fader(deckNumber, newValue, oldValue)) {
                 components.Pot.prototype.input.call(this, channel, control, value, status, group);
             }
