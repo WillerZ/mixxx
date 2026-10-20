@@ -897,6 +897,28 @@ void EngineBuffer::slipQuitAndAdopt() {
     m_pSlipButton->set(0);
 }
 
+void EngineBuffer::setPairTransport(
+        EnginePairTransport* pPairTransport, PairRole role) {
+    if (role == PairRole::Unpaired) {
+        // Disarm: drop the role first, so the engine thread never sees a pair
+        // role combined with a dangling transport pointer.
+        m_pairRole.storeRelease(static_cast<quint8>(role));
+        m_pPairTransport.storeRelease(pPairTransport);
+    } else {
+        // Arm: publish the pointer before the role enables its use.
+        m_pPairTransport.storeRelease(pPairTransport);
+        m_pairRole.storeRelease(static_cast<quint8>(role));
+    }
+}
+
+PairRole EngineBuffer::pairRole() const {
+    return static_cast<PairRole>(m_pairRole.loadAcquire());
+}
+
+EnginePairTransport* EngineBuffer::pairTransport() const {
+    return m_pPairTransport.loadAcquire();
+}
+
 void EngineBuffer::processTrackLocked(
         CSAMPLE* pOutput, const std::size_t bufferSize, mixxx::audio::SampleRate sampleRate) {
     ScopedTimer t(QStringLiteral("EngineBuffer::process_pauselock"));

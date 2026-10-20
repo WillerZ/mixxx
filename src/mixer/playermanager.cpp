@@ -11,6 +11,7 @@
 #include "library/trackcollectionmanager.h"
 #include "mixer/auxiliary.h"
 #include "mixer/deck.h"
+#include "mixer/deckpairmanager.h"
 #include "mixer/microphone.h"
 #include "mixer/previewdeck.h"
 #include "mixer/sampler.h"
@@ -134,6 +135,10 @@ PlayerManager::PlayerManager(UserSettingsPointer pConfig,
 
     // This is parented to the PlayerManager so does not need to be deleted
     m_pSamplerBank = new SamplerBank(m_pConfig, this);
+
+    // Owns the deck pairs. Parented to the PlayerManager and created before
+    // any deck, so it is destroyed before them and can disarm all pairs.
+    m_pDeckPairManager = new DeckPairManager(m_pConfig, m_pEngine, this);
 
     m_cloneTimer.start();
 }
@@ -366,6 +371,9 @@ void PlayerManager::addDeckInner() {
 
     m_players[handleGroup.handle()] = pDeck;
     m_decks.append(pDeck);
+
+    // Decks 1+3 and 2+4 may act as a single deck pair.
+    m_pDeckPairManager->addDeck(deckIndex, pDeck);
 
     // Register the deck output with SoundManager.
     m_pSoundManager->registerOutput(

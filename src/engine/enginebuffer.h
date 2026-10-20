@@ -11,6 +11,7 @@
 #include "control/controlvalue.h"
 #include "control/pollingcontrolproxy.h"
 #include "engine/cachingreader/cachingreader.h"
+#include "engine/deckpairtransport.h"
 #include "engine/engineobject.h"
 #include "engine/slipmodestate.h"
 #include "engine/sync/syncable.h"
@@ -116,6 +117,9 @@ class EngineBuffer : public EngineObject {
     double getSpeed() const;
     mixxx::audio::ChannelCount getChannelCount() const {
         return m_channelCount;
+    }
+    mixxx::audio::FramePos getPlayPos() const {
+        return m_playPos;
     }
     bool getScratching() const;
     bool isReverse() const;
@@ -249,6 +253,21 @@ class EngineBuffer : public EngineObject {
     void verifyPlay();
 
     void slipQuitAndAdopt();
+
+    /// \name Deck pair transport handoff
+    ///
+    /// `DeckPairManager` (main thread) hands the shared transport object of a
+    /// deck pair over to the two member buffers. The object has a static
+    /// lifetime, only the role and the active flag change. Phase 1 uses this
+    /// for reporting only, the transport lock is added on top of it later.
+    /// @{
+    void setPairTransport(EnginePairTransport* pPairTransport, PairRole role);
+    PairRole pairRole() const;
+    EnginePairTransport* pairTransport() const;
+    bool isPaired() const {
+        return pairRole() != PairRole::Unpaired;
+    }
+    /// @}
 
   public slots:
     void slotControlPlayRequest(double);
@@ -487,6 +506,12 @@ class EngineBuffer : public EngineObject {
     /// indicates a clone seek on a bosition from another deck
     static constexpr QueuedSeek kCloneSeek = {mixxx::audio::kInvalidFramePos, SEEK_CLONE};
     QAtomicPointer<EngineChannel> m_pChannelToCloneFrom;
+
+    // Deck pair transport, handed over by DeckPairManager (main thread). The
+    // pointed-to object is never destroyed while the manager lives, so reading
+    // the pointer and the role is safe from the engine thread.
+    QAtomicPointer<EnginePairTransport> m_pPairTransport;
+    QAtomicInteger<quint8> m_pairRole = static_cast<quint8>(PairRole::Unpaired);
 
     // Is true if the previous buffer was silent due to pausing
     QAtomicInt m_iTrackLoading;

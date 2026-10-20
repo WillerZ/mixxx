@@ -1280,6 +1280,7 @@ add_library(
   src/engine/channels/enginechannel.cpp
   src/engine/channels/enginedeck.cpp
   src/engine/channels/enginemicrophone.cpp
+  src/engine/deckpairtransport.cpp
   src/engine/controls/bpmcontrol.cpp
   src/engine/controls/clockcontrol.cpp
   src/engine/controls/cuecontrol.cpp
@@ -1448,6 +1449,7 @@ add_library(
   src/mixer/baseplayer.cpp
   src/mixer/basetrackplayer.cpp
   src/mixer/deck.cpp
+  src/mixer/deckpairmanager.cpp
   src/mixer/microphone.cpp
   src/mixer/playerinfo.cpp
   src/mixer/playermanager.cpp
@@ -2735,6 +2737,8 @@ if(BUILD_TESTING)
     src/test/cratestorage_test.cpp
     src/test/cue_test.cpp
     src/test/cuecontrol_test.cpp
+    src/test/deckpairmanager_test.cpp
+    src/test/deckpairtransport_test.cpp
     src/test/dbconnectionpool_test.cpp
     src/test/dbidtest.cpp
     src/test/directorydaotest.cpp

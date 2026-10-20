@@ -14549,3 +14549,7 @@
 [QuickEffectRack1_[Channel2]_Effect1],parameter8_toggle,0
 [Sampler1],reverseroll,0
 [Channel1],hotcue_19_goto,0
+[Channel1],pair_enabled,0
+[Channel2],pair_enabled,0
+[Channel3],pair_enabled,0
+[Channel4],pair_enabled,0

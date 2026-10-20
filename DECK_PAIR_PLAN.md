@@ -100,13 +100,29 @@ Behavioral corollaries (for docs):
   tempo comes from the pair leader); the leader may sync freely with other decks — the
   follower rides the pair plane, which already includes sync correction.
 - **Vinyl control** on a follower is refused while paired (vinyl *is* a transport authority,
-  §5.8). Vinyl on the leader works: it drives the pair plane; the follower follows.
-- **Eject while paired**: ejects both; the pair stays engaged with no track (loading on either
-  deck then loads both — "load/eject affect both decks"; an empty pair behaves like one empty
-  deck, loadable again). *Alternative (auto-disband on eject) rejected as more surprising;
-  kept as a bench-testable tunable (§9).*
-- Load-while-paired bypasses `[Controls]AllowTrackLoadToPlayingDeck` on the *follower*
-  intentionally (the leader's own play state is what matters); noted for docs.
+  §5.8). Vinyl on the leader works: it drives the pair plane;
+  the follower follows.- **Eject while paired** : ejects both(a playing partner is stopped first);
+  the pair stays
+                          engaged with no
+                          track(loading on either deck then loads both — "load/eject affect both
+                                  decks "; an empty pair behaves like one empty deck, loadable again). Both directions are
+                                  gated by the "load when deck playing" safeguard below.* Alternative(auto - disband on eject)
+                                          rejected as more surprising;
+                                  kept as a bench - testable tunable(§9).*-Loads * *and ejects * *propagated to the partner deck * *honour * *the user's "load when deck playing " safeguard (`[Controls]LoadWhenDeckPlaying`, incl. the legacy
+  `[Controls] AllowTrackLoadToPlayingDeck`) — a pair must not be a way to override it(decided in the Phase - 1 bench test; supersedes the earlier "bypasses intentionally" note)
+                                  .Same tri
+                  - state as the library load paths : `Reject` (default)leaves a playing partner untouched(load * and*eject are refused) and
+          warns, `Allow` loads it and keeps
+          it playing, `AllowButStopDeck` loads it and stops it.Track adoption at formation needs
+                      no such check : pairing an audible deck is refused outright(R5),
+          so the adopting deck is
+                  never playing.-
+                  A refused propagation leaves the two members holding different tracks while still
+                  paired.The intended end state is** all
+                  -
+          or -nothing**(the DJ expects a pair load / eject to complete on both decks or not at all),
+          which becomes expressible once the play - state mirror makes "one plays, one doesn't" impossible; deferred to the Phase-5 bench test
+  (§9.7).
 
 ---
 
@@ -120,14 +136,12 @@ Behavioral corollaries (for docs):
    way. Without it the follower replays the *previous* callback's transport → a constant
    one-buffer (~5–23 ms) phase offset between vocal and instrumental — audible against a stem
    pair. With it, the lock is same-callback exact.
-2. **CO notifications are synchronous on the writer thread; no engine-thread event dispatch
-   exists in 2.7** (no `ControlEventQueue`/`broadcast()`/`processControlEventSignals()`).
-   `ControlDoublePrivate::setInner` emits `valueChanged` inline (`control.cpp:287–298`);
-   `ControlObject` re-emits unless the setter is itself (self-echo suppression,
-   `controlobject.cpp:48–54`). Every engine CO connection is `Qt::DirectConnection`
-   (`enginebuffer.cpp:130,136,…`) because the audio thread has no event loop. Consequences:
-   engine slots are thin (atomics/COs only, mutation deferred to `process()`); a main-thread
-   bridge writing COs reaches engine slots inline with **zero added latency**;
+2. **CO notifications are synchronous on the writer thread;
+  no engine - thread event dispatch exists in 2.7 * *(no `ControlEventQueue`/`broadcast()`/`processControlEventSignals()`).
+   `ControlDoublePrivate::setInner` emits `valueChanged` inline(`control.cpp : 287–298`);
+  `ControlObject` re - emits unless the setter is itself(self - echo suppression,
+   `controlobject.cpp : 48–54`).Every engine CO connection is `Qt::DirectConnection` (`enginebuffer.cpp : 130, 136,…`)because the audio thread has no event loop.Consequences : engine slots are thin(atomics / COs only, mutation deferred to `process()`);
+  a main - thread bridge writing COs reaches engine slots inline with** zero added latency**;
    `QueuedConnection` bridge proxies fed from the engine thread deliver on the main loop (fine
    for status mirrors; transport never waits on the bridge).
 3. **`play` is the only confirm-required deck CO** (`enginebuffer.cpp:128–133`); the engine
@@ -635,8 +649,10 @@ co_dump baseline: only new `[ChannelN]` key is `pair_enabled`).
    and documented; suppress-if-proven-needed hook in Phase 5.
 7. **Tunable behaviors flagged for bench testing** (each is a table entry, not architecture):
    auto-disband vs persist on eject; `keylock`/`pitch_adjust` shared vs per-deck; follower
-   rate-slider mirror granularity (potmeter flood rate). *(Roll-coupling tunable removed with
-   the v2 re-spec.)*
+   rate-slider mirror granularity (potmeter flood rate); **all-or-nothing pair load/eject**
+   instead of leaving a `Reject`-blocked pair momentarily divergent (§2 corollaries; needs
+   the Phase-3 play-state mirror to be expressible, so it is a Phase-5 bench item).
+   *(Roll-coupling tunable removed with the v2 re-spec.)*
 8. **EOT/`end_of_track`**: `end_of_track` CO is vestigial in 2.7 (nothing sets it to 1);
    EOT play-release is mirrored and idempotent (T21).
 9. **Interaction with deck clone & `[Controls]AllowTrackLoadToPlayingDeck`**: clone onto a

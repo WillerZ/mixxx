@@ -98,6 +98,19 @@ class BaseTrackPlayerImpl : public BaseTrackPlayer {
 
     void setupEqControls() final;
 
+    /// Loads the track of \param pChannel onto this deck and aligns the
+    /// initial play position with that channel (one-shot clone seek). Unlike
+    /// slotCloneFromGroup() the stem selection is not copied from the source
+    /// channel: the caller decides, so that a deck pair can keep the per-deck
+    /// stem selection of the deck which adopts the track.
+#ifdef __STEM__
+    void cloneFromChannel(EngineChannel* pChannel,
+            const mixxx::StemChannelSelection& stemMask,
+            bool play);
+#else
+    void cloneFromChannel(EngineChannel* pChannel, bool play);
+#endif
+
     /// Returns true if PushButton has been created and no slot is currently
     /// connected to trackMenuChangeRequest().
     /// PushButtons persist skin reload, connected widgets don't, i.e. the

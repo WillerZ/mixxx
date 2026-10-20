@@ -755,11 +755,34 @@ void BaseTrackPlayerImpl::slotCloneChannel(EngineChannel* pChannel) {
         return;
     }
 
-    m_pChannelToCloneFrom = pChannel;
-    bool play = ControlObject::toBool(ConfigKey(m_pChannelToCloneFrom->getGroup(), "play"));
-    slotLoadTrack(pTrack,
+    cloneFromChannel(pChannel,
 #ifdef __STEM__
             pChannel->getEngineBuffer()->getStemMask(),
+#endif
+            ControlObject::toBool(ConfigKey(pChannel->getGroup(), "play")));
+}
+
+#ifdef __STEM__
+void BaseTrackPlayerImpl::cloneFromChannel(EngineChannel* pChannel,
+        const mixxx::StemChannelSelection& stemMask,
+        bool play) {
+#else
+void BaseTrackPlayerImpl::cloneFromChannel(EngineChannel* pChannel, bool play) {
+#endif
+    // don't clone from ourselves
+    if (!pChannel || pChannel == m_pChannel) {
+        return;
+    }
+
+    TrackPointer pTrack = pChannel->getEngineBuffer()->getLoadedTrack();
+    if (!pTrack) {
+        return;
+    }
+
+    m_pChannelToCloneFrom = pChannel;
+    slotLoadTrack(pTrack,
+#ifdef __STEM__
+            stemMask,
 #endif
             play);
 }

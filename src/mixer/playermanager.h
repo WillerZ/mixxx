@@ -18,6 +18,7 @@ class Auxiliary;
 class BaseTrackPlayer;
 class ControlObject;
 class Deck;
+class DeckPairManager;
 class EffectsManager;
 class EngineMixer;
 class Library;
@@ -139,6 +140,11 @@ class PlayerManager : public PlayerManagerInterface {
     // Binds signals between PlayerManager and Library. The library
     // must exist at least for the lifetime of this instance.
     void bindToLibrary(Library* pLibrary);
+
+    /// Owner of the deck pair lifecycle (decks 1+3 and 2+4). Never null.
+    DeckPairManager* getDeckPairManager() const {
+        return m_pDeckPairManager;
+    }
 
     QStringList getVisualPlayerGroups();
 
@@ -291,6 +297,10 @@ class PlayerManager : public PlayerManagerInterface {
     EffectsManager* m_pEffectsManager;
     EngineMixer* m_pEngine;
     SamplerBank* m_pSamplerBank;
+    // Owns the deck pairs (decks 1+3 and 2+4). Constructed before any deck,
+    // so it is destroyed before them and can disarm all pairs while the decks
+    // and their engine buffers still exist.
+    DeckPairManager* m_pDeckPairManager;
     std::unique_ptr<ControlObject> m_pCONumDecks;
     std::unique_ptr<ControlObject> m_pCONumSamplers;
     std::unique_ptr<ControlObject> m_pCONumPreviewDecks;
