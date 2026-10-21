@@ -1768,8 +1768,20 @@ void LoopingControl::slotBeatLoopToggle(double pressed) {
 }
 
 void LoopingControl::slotBeatLoopRollActivate(double pressed) {
+    // Deck pairs (DECK_PAIR_PLAN.md R8 / 9.13): on a locked pair follower the
+    // running loop is the pair's status mirrored from the leader. The
+    // vanilla first-press semantics ("exit the running loop, roll on the next
+    // press") would destroy that replica without any change on the leader --
+    // and the edge-triggered mirror never re-pushes an unchanged status, so
+    // the pair's loop would then exist only on the leader (bench round 3).
+    // A deck-local roll gesture must not consume the pair's loop: a locked
+    // follower goes straight to the roll branch, which stores the replica and
+    // restores it on release, exactly like the roll on an unpaired deck.
+    EngineBuffer* pBuffer = getEngineBuffer();
+    const bool bLockedPairFollower =
+            pBuffer != nullptr && pBuffer->isPairLockedFollower();
     if (pressed > 0.0) {
-        if (m_bLoopingEnabled) {
+        if (m_bLoopingEnabled && !bLockedPairFollower) {
             setLoopingEnabled(false);
             // Make sure slip mode is not turned off if it was turned on
             // by something that was not a rolling beatloop.

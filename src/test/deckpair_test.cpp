@@ -764,6 +764,101 @@ TEST_F(DeckPairEngineTest, JogAccumulatorCrossesThePairLaneExactlyOnce) {
     assertPairLocked();
 }
 
+// T40 (bench round 3, finding 9.13): a roll-pad press on the follower while
+// the pair loops. `beatlooproll_activate` is deck-local (R8) by design, but
+// its vanilla first-press semantics ("a running loop is exited before the
+// roll can start") read the follower's own loop state -- which on a locked
+// follower is the pair's mirrored replica. The exit destroyed the replica
+// while the leader's unchanged status (edge-triggered mirror) never re-pushed
+// it: the pair's loop then existed only on the leader, and the first press of
+// every roll came out as nothing or as a wrong length. A deck-local roll must
+// roll over the replica, not consume it.
+TEST_F(DeckPairEngineTest, FollowerRollEngagesOverThePairsLoopOnFirstPress) {
+    startLockedPair();
+
+    // A 4-beat pair loop created on the leader; the replica follows.
+    pulse(kLeader, QStringLiteral("beatloop_4_activate"));
+    ProcessBuffer();
+    ProcessBuffer();
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+
+    // The SC Live 4 roll-pad dance on the follower: store the (mirrored)
+    // size, write the roll length, press the roll.
+    setControl(kFollower, QStringLiteral("beatloop_size"), 1.0);
+    setControl(kFollower, QStringLiteral("beatlooproll_activate"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+
+    // The roll must engage on the first press, like on an unpaired deck...
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("slip_enabled")))
+            << "a roll-pad press on the follower must engage the deck-local "
+               "roll, not consume the pair loop's replica (bench 9.13)";
+    // ...and it must leave the pair's loop alone.
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")))
+            << "the pair keeps looping while the follower rolls";
+
+    // Release: the roll retires, slip releases, and the replica re-anchors
+    // onto the pair loop the roll only borrowed over.
+    setControl(kFollower, QStringLiteral("beatlooproll_activate"), 0.0);
+    // Model the production main loop: on real hardware the slip release is
+    // delivered to the bridge while the controller thread is mid-command,
+    // and the trailing re-anchor pass runs from the event loop once the
+    // release transaction has completed (see DeckPairManager's slip-release
+    // listener, DECK_PAIR_PLAN.md 9.13).
+    QTest::qWait(1);
+    for (int i = 0; i < 6; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")))
+            << "the follower's replica still mirrors the pair loop "
+               "(bench 9.13: it died with the roll's first press)";
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+}
+
+// T41 (bench round 3, finding 9.13, the DJ's own sequence): roll pads on the
+// follower, then a plain manual loop made on the leader while nothing slips.
+TEST_F(DeckPairEngineTest, LeaderLoopAfterFollowerRollCycleReachesReplica) {
+    startLockedPair();
+
+    // Roll cycle on the follower (no pair loop this time): press, hold,
+    // release, and let the slip release and the re-anchor complete.
+    setControl(kFollower, QStringLiteral("beatloop_size"), 1.0);
+    setControl(kFollower, QStringLiteral("beatlooproll_activate"), 1.0);
+    for (int i = 0; i < 4; ++i) {
+        ProcessBuffer();
+    }
+    setControl(kFollower, QStringLiteral("beatlooproll_activate"), 0.0);
+    for (int i = 0; i < 8; ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    assertPairLocked();
+
+    // A loop created on the leader in plain play: the replica must adopt it.
+    // (Engine-written region: the loop points + loop_enabled mirror event
+    // family the DJ's manual loop rides on the bridge.)
+    pulse(kLeader, QStringLiteral("beatloop_4_activate"));
+    for (int i = 0; i < 6; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")))
+            << "the replica must adopt the leader's manual loop after a "
+               "follower roll cycle (bench 9.13: it stayed leader-only)";
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+}
+
 // T17: jog, wheel and scratch on the LEADER. The follower is driven purely
 // through the pair snapshot: it must follow sample-exact through every one
 // of these gestures, including the scratch release ramp.

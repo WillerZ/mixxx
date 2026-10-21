@@ -535,9 +535,9 @@ seek/play/rate gates.
 *Exit:* T9–T12, T14–T15, T21, T24, T39 green (frame-exact lock incl. long-run, reverse-rate,
 unpair continuity, load-race).
 
-**Phase 3 — Command bridge.** *(complete — see deviation notes §9.12)*
-Full relay + mirror tables (§5.5), accumulator steering, `play` confirm-through, the static
-"no slip keys" invariant test.
+**Phase 3 — Command bridge.** *(complete — see deviation notes §9.12, §9.13)*
+Full relay + mirror tables (§5.5), the `jog` accumulator lane, `play` confirm-through, the
+static "no slip keys" invariant test.
 *Exit:* T16–T20, T22–T23, T30, T37 green (every command class from **both** decks; follower
 status coherence).
 
@@ -620,6 +620,8 @@ same-callback frame-exact position equality + play/loop-state equality; and a de
 | T35 | mgr | Pair formation when **leader has no track** | pair engages empty; first load propagates (T6 path) |
 | T36 | mgr | Re-pair immediately after unpair, swap roles (then 1, then 3) | roles flip; second follower adopts new leader's track |
 | T37 | unit | Bridge echo safety: relay a trigger CO ⇒ exactly one leader-side slot entry (ControlObject spy pattern from `controlobjecttest`) | no ping-pong with `ignoreNops=false` buttons |
+| T40 | unit | Roll-pad dance on the follower while the pair loops (SC Live mapping sequence) | roll engages on the first press, pair loop survives on both members (§9.13) |
+| T41 | unit | DJ's round-3 sequence: follower roll cycle, then a plain leader loop | replica adopts the leader's loop after the slip cycle (§9.13) |
 | T38 | build | `ctest -R "DeckPair"`, incl. `-D STEM=ON` job | all green |
 | T39 | engine | **Load race**: relayed seek arrives while follower is mid-load (seek dropped per `enginebuffer.cpp:593`) | positions equal again on the first follower callback after load; no stale queued-seek artifacts |
 
@@ -809,12 +811,13 @@ Deviations found while implementing:
 
 ### 9.12 Phase 3 implementation notes (command bridge, landed; deviations from the plan)
 
-Implemented in the `DeckPairManager` CO bridge (full §5.5 tables + accumulator steering),
+Implemented in the `DeckPairManager` CO bridge (full §5.5 tables),
 `CueControl` (locked-follower preview gate), and `EngineBuffer` (adoption quiescence flag).
 Exit tests T16–T20, T22–T23, T30 (both parts), T37 green (`src/test/deckpair_test.cpp`,
 `DeckPairManagerTest.BridgeTables*`), plus T16b `JogAccumulatorCrossesThePairLaneExactlyOnce`
-and the reworked T16 measurement from bench rounds 2–3 (notes i / j). Written autonomously by the AI assistant as a
-continuation of §9.11; the human developer must bench-verify on real hardware.
+and the reworked T16 measurement from bench rounds 2–3 (note i; the transfer itself is
+§9.13). Written autonomously by the AI assistant as a continuation of §9.11; the human
+developer must bench-verify on real hardware.
 
  a) **Status keys that the engine rewrites as a *side effect* of a relayed command must not
     be relayed** (supersedes §5.5 listing `loop_enabled`, `beatloop_size`, `beatjump_size`
@@ -862,7 +865,7 @@ continuation of §9.11; the human developer must bench-verify on real hardware.
     across successive notches; bench round 2 confirmed wheel and scratch feel identical
     on both members. Only `jog` — whose single consumer reads-and-zeroes it — needs any
     special transfer at all, and it turns out that transfer cannot live in the CO bridge
-    (notes i and j): it rides the pair transport's accumulator lane.
+    (note i and §9.13): it rides the pair transport's accumulator lane.
 
  e) **The shared-Track beatgrid family (`bpm`, `beats_adjust_*`, `beats_translate_*`) is
     not relayed** (§5.5 listed it): the edit mutates the one Track both members share and
@@ -883,7 +886,7 @@ continuation of §9.11; the human developer must bench-verify on real hardware.
     cited by the `EngineBuffer`/`RateControl` code): skipping `calculateSpeed()` also skips
     `getJogFactor()`'s read-and-zero and low-pass decay. The consumer step is what *gives*
     the accumulator a meaning, and on a pair it must still happen — the follower runs it
-    once per callback and its consumed value is what crosses to the leader (note j, which
+    once per callback and its consumed value is what crosses to the leader (§9.13, which
     supersedes the value-copy and drain-move transfers proposed here first).
 
  i) **Bench findings #3/#4 (rounds 2+3, SC Live 4) — no CO-level transfer of `jog` can
@@ -899,30 +902,56 @@ continuation of §9.11; the human developer must bench-verify on real hardware.
     relay can know which contract wrote the value. The copy relay re-fed cumulative
     `+=` deltas (2–3x); the drain-move summed absolute velocity messages — ~2 per
     callback window at bench buffer sizes is exactly the uniform 2x that remained.
-     Resolution in note j; both failed transfers are pinned by the round-3 test pair
+     Resolution in the new §9.13; both failed transfers are pinned by the round-3 test pair
      (`absolute writes must not sum`, `relative bursts must not duplicate`).
 
- j) **`jog` crosses on the pair transport's accumulator lane, not the CO bridge**
-    (implementation of note i): the locked follower's per-callback consume step
-    (`EngineBuffer` → `RateControl::pairFollowerConsumeAccumulators()`, note h) now
-    *publishes* what its read-and-zero discarded onto a latest-wins slot in
-    `EnginePairTransport`; the pair leader's `RateControl::getJogFactor()` **claims** the
-    lane into its own consumption, exactly where a single deck would have consumed the
-    same value. Both contracts then behave single-deck-exactly for free: overwrite
-    happens on the follower's CO before its consume (latest velocity), accumulation
-    happens there too (`+=` bursts sum), and each value reaches the leader's rate
-    precisely once. One publish per follower callback makes the slot latest-wins (a
-    stalled leader — loading — cannot accumulate a stale lump). Latency: one callback,
-    which is the delay a post-consumption write has on a single deck anyway. `jog` is
-    removed from the relay table; the table-invariant test pins its absence from both
-    tables because every CO transfer of it failed the bench while passing write-once
-    tests. NaNs are dropped at publish (poisoned wheel positions) as `getJogFactor`
-    drops them; `reset()` silences the lane with the pair. Regression:
-    `DeckPairEngineTest.JogAccumulatorCrossesThePairLaneExactlyOnce` (negative control:
-    publishing a constant or a sum, or skipping the claim, fails it outright) and the
-    reworked T16, which now measures the *steady-state* rate effect per buffer (the old
-    window-sum thresholds were effect-zero tolerant — the very test weakness the bench
-    kept discovering).
+### 9.13 Bench round 3 (SC Live 4) — the accumulator lane and the loop replica
+
+Implemented in `EnginePairTransport` (accumulator lane), `RateControl`/`EngineBuffer`
+(consume-and-publish, claim-on-consume), `LoopingControl` (roll gate) and the
+`DeckPairManager` re-anchor listener. Written autonomously by the AI assistant as the
+follow-up to the round-2 bench; the human developer must re-verify on the rig.
+
+**`jog` crosses on the pair transport's accumulator lane, not the CO bridge**
+(a resolution of note i): the locked follower's per-callback consume step
+(`EngineBuffer` → `RateControl::pairFollowerConsumeAccumulators()`, note h) now
+*publishes* what its read-and-zero discarded onto a latest-wins slot in
+`EnginePairTransport`; the pair leader's `RateControl::getJogFactor()` **claims** the
+lane into its own consumption, exactly where a single deck would have consumed the
+same value. Both contracts then behave single-deck-exactly for free: overwrite
+happens on the follower's CO before its consume (latest velocity), accumulation
+happens there too (`+=` bursts sum), and each value reaches the leader's rate
+precisely once. One publish per follower callback makes the slot latest-wins (a
+stalled leader — loading — cannot accumulate a stale lump). Latency: one callback,
+which is the delay a post-consumption write has on a single deck anyway. `jog` is
+removed from the relay table; the table-invariant test pins its absence from both
+tables because every CO transfer of it failed the bench while passing write-once
+tests. NaNs are dropped at publish (poisoned wheel positions) as `getJogFactor`
+drops them; `reset()` silences the lane with the pair. Regression:
+`DeckPairEngineTest.JogAccumulatorCrossesThePairLaneExactlyOnce` (negative control:
+publishing a constant or a sum, or skipping the claim, fails it outright) and the
+reworked T16, which now measures the *steady-state* rate effect per buffer (the old
+window-sum thresholds were effect-zero tolerant — the very test weakness the bench
+kept discovering).
+
+**A deck-local roll must not consume the pair loop's replica** (bench round 3, found by
+T40): the SC Live mapping's roll pads press `beatlooproll_activate`, whose first-press
+semantics on a deck with a running loop are "exit the loop first, roll on the next press".
+On a locked follower the running loop is the leader's mirrored replica, so the first press
+(a) never engaged the roll and (b) destroyed the replica — and since the mirror is
+edge-triggered, the leader's unchanged `loop_enabled` never re-pushed it. That is the
+DJ's whole round-3 loop report: rolls with wrong/absent lengths and a later manual loop
+existing "only on the lead deck" (the follower's loop machinery was no longer following).
+Fix, two halves, each pinned red→green by
+`DeckPairEngineTest.FollowerRollEngagesOverThePairsLoopOnFirstPress` with negative
+controls: `LoopingControl::slotBeatLoopRollActivate` lets a locked pair follower skip the
+loop-exit branch (the roll stores the replica and restores it around the gesture, like an
+unpaired deck — R8 stays intact: the roll is deck-local, the loop stays the pair's); and
+the slip-release re-anchor gained an idempotent trailing pass from the event loop, because
+a slip release can be one write inside a longer command transaction (roll release =
+loop-disable + slip-release + loop-restore) whose remaining writes would otherwise land
+after an inline re-anchor. `DeckPairEngineTest.LeaderLoopAfterFollowerRollCycleReachesReplica`
+pins the DJ's exact sequence (roll pads, then a plain leader loop).
 
 *Phase-4 carry-overs unchanged:* re-sync the follower's internal rate state before
 slip-engage takes over (9.11 d), and the 9.11 m bench item (two-fader rapid alternation).

@@ -6,6 +6,8 @@
 //
 #include "mixer/deckpairmanager.h"
 
+#include <QTimer>
+
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
 #include "engine/channels/enginedeck.h"
@@ -1113,6 +1115,28 @@ void DeckPairManager::buildBridge(
                             return;
                         }
                         refreshMirrorValues(*pPair);
+                        // Trailing pass (DECK_PAIR_PLAN.md 9.13): a slip
+                        // release can be one write *inside* a longer command
+                        // transaction -- the roll release runs loop-disable,
+                        // slip-release, loop-restore in one handler -- and an
+                        // inline delivery re-anchors in the middle of it, so
+                        // the transaction's remaining writes land after the
+                        // fresh anchor and clobber it. Re-run the (idempotent,
+                        // guard-quiesced) anchor once the event loop turns,
+                        // when the command has completed; on the engine and
+                        // controller threads the delivery is already queued
+                        // behind their current work, so this only closes the
+                        // same-thread hole.
+                        QTimer::singleShot(0, this, [this, pPair]() {
+                            if (!pPair->active) {
+                                return;
+                            }
+                            if (pPair->pFollowerSlipEnabled &&
+                                    pPair->pFollowerSlipEnabled->toBool()) {
+                                return;
+                            }
+                            refreshMirrorValues(*pPair);
+                        });
                     });
         }
     }
