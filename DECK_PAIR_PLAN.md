@@ -368,16 +368,20 @@ on the writer thread and touch atomics/COs only, the existing slot discipline):
 ### 5.5 The CO bridge: relay (F→L) and mirror (L→F)
 
 Owned by `DeckPair` (main thread), implemented with `ControlProxy`s parented to it (create/
-destroy on main thread — required). Two static key tables + a re-entrancy guard `m_bridging`
-(needed because trigger buttons use `ignoreNops=false` and always re-emit; value COs quiesce
-naturally via `pSender` self-echo suppression + `ignoreNops=true` default — fact §3.2):
+destroy on main thread — required). Two static key tables + echo quiescence (needed because
+trigger buttons use `ignoreNops=false` and always re-emit; value COs quiesce naturally via
+`pSender` self-echo suppression + `ignoreNops=true` default — fact §3.2). Phase 2 implements
+the quiescence as *equality*: a bridge write is skipped when its target already carries the
+value — see deviation note 9.11 b).
 
 - **Relay F→L** (only while bridged **and the follower is not slipping**; runs inline on the
   writing main thread ⇒ zero added latency to transport):
   `play, start_play, start_stop, stop, start, end, playposition, repeat, quantize, cue_*`
   (set/clear/goto/gotoandplay/gotoandstop/cue_default/cue_cdj/cue_play/play_stutter/
-  cue_preview incl. press+release pairs), `hotcue_N_{activate,set,setcue,setloop,goto,
-  gotoandplay,gotoandstop,gotoandloop,cueloop,activate*,clear,swap,color}`,
+  cue_preview incl. press+release pairs), `hotcue_N_{
+    activate, set, setcue, setloop, goto,
+            gotoandplay, gotoandstop, gotoandloop, cueloop, activate*, clear, swap, color
+}`,
   `loop_in, loop_out, loop_exit, loop_enabled, reloop_toggle, reloop_andstop, loop_remove,
   loop_anchor, loop_move*, loop_scale, loop_halve, loop_double, beatloop*, beatloop_size,
   beatjump*, beatjump_size*, rate, rate_range, rate_dir, rate_temp_*, rate_perm_*, reverse,
@@ -525,7 +529,7 @@ reporting.
 *Exit:* T1–T8 green; manual check via dev-tools CO writes (pair 1+3, loads/ejects follow,
 follower bounces sync/vinyl).
 
-**Phase 2 — Transport lock.**
+**Phase 2 — Transport lock.** *(complete — see deviation notes §9.11)*
 Leader publish + follower consume (§5.2–§5.4.1), `EngineMixer` ordering (§5.6),
 seek/play/rate gates.
 *Exit:* T9–T12, T14–T15, T21, T24, T39 green (frame-exact lock incl. long-run, reverse-rate,
@@ -639,9 +643,13 @@ co_dump baseline: only new `[ChannelN]` key is `pair_enabled`).
    wakes on the shared `EngineWorkerScheduler`; a follower cache miss writes **silence but
    keeps position** (audio glitch, no desync). Phase-5 perf item (prefetch follows the pair
    plane because `hintReader` runs on consumed positions).
-4. **`DirectConnection` discipline**: all bridge code is main-thread-only, writes only COs/
-   atomics, never `ControlObject::set()` static, asserts main thread; T37 enforces
-   re-entrancy safety.
+4. **`DirectConnection` discipline**: bridge slots write only COs/atomics and are
+   reentrancy safe (T37). The relay refuses exactly one origin: writes issued from inside
+   the audio callback on the callback thread (engine-internal status), via
+   `EngineMixer::isEngineCallbackThread()`; commands from every other thread — GUI *and
+   the controller engine thread, which is how hardware delivers input* — relay inline,
+   exactly like a direct controller write to an unpaired deck (supersedes the original
+   "main-thread only" rule; see 9.11 h).
 5. **Replica divergence** (follower loop/cue replica vs leader): self-healing mirror
    overwrites; worst case is a sub-buffer decision diff that never reaches audio while locked
    and is corrected before slip-engage exposes it.
@@ -656,23 +664,169 @@ co_dump baseline: only new `[ChannelN]` key is `pair_enabled`).
 8. **EOT/`end_of_track`**: `end_of_track` CO is vestigial in 2.7 (nothing sets it to 1);
    EOT play-release is mirrored and idempotent (T21).
 9. **Interaction with deck clone & `[Controls]AllowTrackLoadToPlayingDeck`**: clone onto a
-   paired deck loads both; double-tap-clone (`playermanager.cpp:628–653`) needs the
-   `m_bridging` guard so a clone-load doesn't recursive-mirror (T6).
+   paired deck loads both; double-tap-clone (`playermanager.cpp:628–653`) relies on the
+   bridge's quiescence-by-equality (a clone-load writes values the target already carries
+   for a pair, so no recursive mirroring) — T6.
 10. **CPU/memory**: two static `EnginePairTransport` instances; proxies ≈ bridge-table size
     per pair (mirror list kept minimal via per-deck recomputation §5.4.6); zero per-callback
     allocations (POD snapshot).
 
+### 9.11 Phase 2 implementation notes (transport lock, landed; deviations from the plan)
+
+Implemented in `EngineBuffer` (publish/consume + gates), `EngineMixer` (§5.6 ordering),
+`RateControl` (locked-follower slot gates) and the `DeckPairManager` CO bridge (Phase-2
+subset of the §5.5 tables). Exit tests T9–T12, T14–T15, T21, T24, T39 green
+(`src/test/deckpair_test.cpp`; T12/T21 need real scalers — the mock scaler bypasses the
+reader, so loop wrap/repeat never happen on it — and run in a `BaseSignalPathTest` fixture).
+
+Deviations found while implementing:
+
+ a) **`playposition` mirror (supersedes §5.4.6/§5.5 "not mirrored" for locked pairs):**
+    a locked follower stops writing its own playposition (its `updateIndicators` would race
+    the bridge over the same CO), and the leader's playposition is mirrored L→F instead.
+ b) **Quiescence by equality replaces the planned global `m_bridging` flag:** the flag also
+    swallowed *legitimate* derived mirrors inside a relay cascade (e.g. `rate_ratio`, derived
+    by the leader's RateControl from a slider move relayed from the follower). Bridge slots
+    now drop a write whose target already carries the value — every bridged write makes
+    target == source, so echoes (including `ignoreNops=false` button re-emits, T37) terminate
+    at the first repetition; no recursion beyond one echo round is reachable. Equality is
+    necessary but not sufficient for continuously-queued mirrors — see the echo guard (l).
+ c) **Owner-only (read-only) status COs** — `hotcue_N_status/_type`, `beatloop_*_enabled`,
+    `play_latched` — refuse proxy `set()` (their owners write them with `forceSet`); the
+    mirror writes exactly those with the same `forceSet` protocol, main thread, equality-guarded.
+ d) **Follower RateControl gates + completed rate relay:** the slider/range/ratio/perm/
+    fast-forward slots return early while locked (§5.4.5 in spirit: the leader owns the
+    tempo). Without this, the follower's replica recomputes `rate`/`rate_ratio` from internal
+    state its frozen engine never updates and floods the bridge with stale echo values.
+    Because those slots no longer translate a follower gesture into follower CO cascades,
+    the *relay* must carry the complete rate-control surface for R7 to hold ("moving any
+    rate control of either member moves the pair's rate"): the Phase 2 table therefore
+    relays `rate`, `rate_ratio`, `rateRange`, `rate_dir`, all four temp buttons (incl. the
+    `_small` variants), all four perm buttons (incl. `_small`), `reverse`, `fwd` and `back` —
+    and `rate_ratio` additionally acts as the universal net for rate gestures that surface
+    through other controls (e.g. the user BPM adjust via BpmControl). Echoes stay bounded by
+    the equality quiescence (b). T15 asserts the whole set end-to-end. Follow-up (Phase 4):
+    verify the internal rate state is re-synchronised before slip-engage takes over
+    (T13/T25).
+ e) **Slip halts the `play` mirror too** (§5.5 only specified the relay): while the follower
+    slips, its play state belongs to the DJ; the leader's engine re-confirms of `play` must
+    not silence a scratching follower. All other mirrors keep flowing during slip (replica
+    self-healing, §5.4.2). *Superseded by note m: the whole mirror side is halted during
+    slip — §5.4.2's self-healing re-anchors in one shot at slip release instead.*
+ f) **Tree naming:** the rate-range CO is `rateRange` in this tree (upstream `rate_range`);
+    the bridge tables follow the tree.
+ g) **§5.4.7 sharpened:** `slotTrackLoading()` no longer stamps `bPlayAfterLoading` onto a
+    locked follower's play CO — the pair's mirrored play state survives a member's load
+    (T39 found that the stale overwrite, followed by the engine's redundant re-confirm, could
+    pause the leader through the relay in the single-threaded test engine).
+ h) **Relay origin filter = engine callback, not "main thread":** a first implementation
+    accepted relay writes only from the GUI thread — which would have silently dropped every
+    hardware-controller command on the follower, because the controller engine writes COs
+    from its own thread. The filter now refuses writes only when they originate from inside
+    `EngineMixer::process()` on the callback thread (`isEngineCallbackThread()`);
+    GUI and controller -
+            thread commands relay inline.The flag keeps the distinction intact
+                    in gtest too,
+            where the callback runs on the main
+                    thread.Belt and braces : a locked follower's engine additionally does not *make* relayable writes at all(playposition, play stamping, play release), and equality quiescence absorbs the rest.Pinned by
+    `DeckPairEngineTest.RateCommandsFromAForeignThreadAreRelayed`; keep this property in the
+    T34 soak.
+ i) **EOT:** the locked follower skips its own end-of-track play release; the leader's
+    release arrives mirrored (§5.4.5, idempotent per T21).
+ j) **Test units:** `hotcue_*`/`loop_*_position` COs are engine *sample* units (2× frames);
+    position assertions convert via `FramePos::fromEngineSamplePosMaybeInvalid`.
+ k) **Phase 1 tests T6b/T7b re-shaped:** with the play mirror live, "one member playing while
+    the other is stopped" is no longer reachable except through slip — the playing-partner
+    preconditions of the "load when deck playing" tests are now built by slipping the
+    follower (which is exactly §5.5's bridge halt). All-or-nothing pair load/eject remains a
+    Phase-5 bench item (see §2 corollaries, §9.7).
+ l) **Bench finding #1 — pitch-fader limit cycle → bridge echo guard (`BridgeWriteGuard`):**
+    the first real-rig test (2026-10-21) heard a ±2% engine-level pitch oscillation whenever
+    a pitch fader was moved on *either* member, superposing to a second ±2% step and an
+    audible glitch when the other member's fader moved too. Mechanism: slider↔ratio are each
+    bridged in both directions, relays run inline on the writing (often controller) thread,
+    while mirrors are *queued* to the main loop — a mirror that lands late carries a stale
+    leader value, and its echo into the relay looked like a fresh command, rolling the leader
+    back underneath the user's newest fader position: a stale-ghost feedback loop between the
+    two members. Fix, two layers:
+      - *Echo guard* (`BridgeWriteGuard`, per-thread depth): while the bridge itself is
+        writing, the relay refuses to propagate — the echo of a bridge write is delivery,
+        never a command.
+      - *Mirror freshness ordering*: a mirror emission that lands with a value the leader no
+        longer holds is a stale ghost and is dropped (the freshest queued emission carries
+        the current value); applying it would clobber the follower's newer state, and since
+        its echo is deliberately not relayed, nothing would heal it.
+    Equality quiescence (b) stays as the same-value backstop. Regression test
+    `DeckPairEngineTest.StaleQueuedMirrorIsNotRelayedBack` pins the observable property
+    (leader keeps its newest value, both members agree after queued delivery); negative
+    control: removing the freshness check fails it with exactly the clobber signature. The
+    echo guard alone is not separately observable in the synchronous test env — it covers
+    deep engine cascades and is defence in depth.
+    **Bench status (2026-10-21 re-test):** single-fader sweeps on both members, scrub, temp
+    buttons and BPM adjust: clean, no artefacts. The simultaneous two-fader scenario is not
+    physically reproducible on the current rig (one operator, one controller); it is covered
+    by the automated stale-mirror test above, and a sequential rapid fader alternation
+    (leader, then follower, within the settle time; the pair must always settle at the last
+    moved fader) is retained as an open bench item until two-fader hardware is available.
+ m) **Bench finding #2 — roll and slicer pads countermanded → mirror halted during slip:**
+    the same rig session found the Denon SC Live 4 roll pads (`beatlooproll_activate`,
+    `Denon-SC-Live-4-scripts.js:2474-2490`) and the slicer pads in slice mode
+    (`slip_enabled` + `beatlooproll_1_activate`, `:3059-3088`) dead on the pair follower:
+    the effect started and was cancelled on the next buffer. Both mappings work by engaging
+    slip, and R8 makes a slipping follower a live deck again — so a mirror write is not a
+    status update on it, it is a *command*. The leader's playposition (mirrored per note a)
+    landed as a seek on the rolling deck at engine rate and dragged it back onto the pair
+    plane every callback; a mirrored loop status overwrote the deck-local roll window.
+    Fix: `slotBridgeMirror` refuses every write while the follower slips, which makes the
+    bridge symmetric with the relay side (both directions silent, hence "the bridge is
+    disconnected while slipping") and supersedes note e's per-item exception for `play`.
+    Replica self-healing is no longer continuous — it moves to slip release:
+    `refreshMirrorValues()` (extracted from bridge formation, same one-shot bulk copy, same
+    quiescence) runs once when the follower's `slip_enabled` drops to 0 while the pair is
+    still active. Two details that fall out of the bulk copy being out of engine order:
+      - *Mirror table order:* the loop points are listed before `loop_enabled` (they are
+        adjacent in §5.5 anyway). Event-by-event delivery is already ordered by the leader's
+        own engine; the bulk copy is table-ordered, and the follower's `LoopingControl`
+        refuses an enable without a valid region, so a cold replica would drop the loop
+        state permanently (`loopingcontrol.cpp:1020-1035`).
+      - *Delivery thread:* the slip listener uses the default (auto) connection, not a
+        direct one. `EngineBuffer::slotTrackLoaded` resets slip from the load worker thread
+        (`enginebuffer.cpp:609-610`), so a direct listener would run the bulk CO write off the
+        main thread; auto queues it onto the main loop. From the main thread — GUI, and the
+        unit tests, where `ProcessBuffer()` runs the callback on the main thread — delivery
+        stays synchronous, which is what the regression test asserts.
+    `slotBridgeMirror` re-reads `slip_enabled` at delivery time, so a queued re-anchor whose
+    follower has been rolled again in the meantime is dropped rather than clobbering the new
+    slip. Regression tests: `DeckPairEngineTest.MirrorPausedWhileFollowerSlipsAndReanchors`
+    (statuses frozen during slip, re-anchored on release, lock healthy afterwards) and
+    `DeckPairAudioTest.FollowerDeckLocalRollWrapsWhilePairAdvances` (real scalers: the
+    follower wraps twice inside its own 2-beat window while the leader plays clear through
+    it, then rejoins frame-exact on release). Negative control: with the play-only gate of
+    note e, the second test fails as the pair plane reaches the roll window — the audible
+    plane seek-stomp, not a slack artefact. T13 and T25 (Phase 4) cover the same property
+    further; note d's Phase-4 follow-up (re-synchronising the internal rate state before
+    slip-engage takes over) is unchanged and still open.
+
 ## 10. Explicitly out of scope
 
-Skin/QML/keyboard UI affordances; controller mapping files and scripts (`pair_enabled` becomes
-mappable when the picker entry lands); `[DeckN]` aliasing; decks beyond 4; per-deck tempo
-within a pair; coupled rolls (removed in v2 — see R8); network/MIDI clock; recording (a pair
-records as two channels naturally).
+Skin/QML/keyboard UI affordances;
+    controller mapping files and scripts(`pair_enabled` becomes
+                    mappable when the picker entry lands);
+    `[DeckN]` aliasing;
+    decks beyond 4;
+    per - deck tempo within a pair;
+    coupled rolls(removed in v2 — see R8);
+    network / MIDI clock;
+    recording(a pair records as two channels naturally)
+                    .
 
----
+            -- -
 
-> **Disclaimer (repeat):** This plan was autonomously generated by an AI assistant from
-> codebase research (four agent reports cross-verified against source at the cited lines) and
-> the developer's v2 re-spec. It is design input for the human developer, not a contribution
-> to upstream; implementation must be driven, tested on real DJ hardware, and submitted by the
-> human developer per `AGENTS.md`.
+            > **Disclaimer(repeat)
+            : **This plan was autonomously generated by an AI assistant from
+            > codebase research(four agent reports cross -
+                      verified against source at the cited lines) and > the
+            developer's v2 re-spec. It is design input for the human developer, not a contribution > to upstream; implementation
+            must be driven,
+    tested on real DJ hardware,
+    and submitted by the > human developer per `AGENTS.md`.

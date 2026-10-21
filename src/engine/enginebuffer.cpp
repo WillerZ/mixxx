@@ -415,10 +415,30 @@ void EngineBuffer::queueNewPlaypos(mixxx::audio::FramePos position, enum SeekReq
         // use SEEK_STANDARD for that
         seekType = SEEK_STANDARD;
     }
+    if (!(seekType & SEEK_CLONE) && isPairLockedFollower()) {
+        // Deck pair transport lock (DECK_PAIR_PLAN.md 5.4.2): a locked
+        // follower's position comes from the pair snapshot, every local seek
+        // is suppressed -- a re-seek mid-lock would also fight the
+        // crossfade rescaler and click. The follower's replica controls keep
+        // their state; the quantization and phase resolution for the pair
+        // happens once, on the leader. The single exception is the one-shot
+        // SEEK_CLONE which aligns the follower with the pair plane at pair
+        // formation (5.7).
+        if (kLogger.traceEnabled()) {
+            kLogger.trace() << "queueNewPlaypos" << getGroup()
+                            << "pair follower locked: dropping seek to" << position;
+        }
+        return;
+    }
     m_queuedSeek.setValue({position, seekType});
 }
 
 void EngineBuffer::requestSyncPhase() {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the phase resolution of the shared transport
+        // (DECK_PAIR_PLAN.md 5.4).
+        return;
+    }
     // Don't overwrite m_iSeekQueued
     m_iSeekPhaseQueued = 1;
 }
@@ -529,8 +549,13 @@ void EngineBuffer::slotTrackLoading() {
     m_iTrackLoading = 1;
     m_pause.unlock();
 
-    // Set play here, to signal the user that the play command is adopted
-    m_playButton->set((double)m_bPlayAfterLoading);
+    // Set play here, to signal the user that the play command is adopted.
+    // A locked pair follower keeps the pair's mirrored play state instead:
+    // the shared transport must not be silenced just because one member is
+    // loading (DECK_PAIR_PLAN.md 5.4.7).
+    if (!isPairLockedFollower()) {
+        m_playButton->set((double)m_bPlayAfterLoading);
+    }
     setTrackEndPosition(mixxx::audio::kInvalidFramePos); // Stop renderer
 }
 
@@ -805,6 +830,18 @@ void EngineBuffer::verifyPlay() {
 }
 
 void EngineBuffer::slotControlPlayRequest(double v) {
+    if (isPairLockedFollower()) {
+        // Deck pair transport lock (DECK_PAIR_PLAN.md 5.4.5): the play state
+        // of a locked follower is a mirror of the pair leader's. The write
+        // must still be confirmed -- that is how the mirrored value lands at
+        // all and it keeps widget and controller toggle states correct --
+        // but the transport effects and the phase sync request belong to the
+        // leader. Commands issued on the follower are relayed to the leader
+        // by DeckPairManager.
+        m_playButton->setAndConfirm(v > 0.0 ? 1.0 : 0.0);
+        return;
+    }
+
     bool oldPlay = m_playButton->toBool();
     bool verifiedPlay = updateIndicatorsAndModifyPlay(v > 0.0, oldPlay);
 
@@ -899,6 +936,11 @@ void EngineBuffer::slipQuitAndAdopt() {
 
 void EngineBuffer::setPairTransport(
         EnginePairTransport* pPairTransport, PairRole role) {
+    // Any snapshot continuity tracking belongs to the previous pair. Reset it
+    // while the pair is still disarmed: the engine thread only consults these
+    // fields while consuming an active pair.
+    m_pairHaveLastPosEnd = false;
+    m_pairLastPosEnd = mixxx::audio::FramePos();
     if (role == PairRole::Unpaired) {
         // Disarm: drop the role first, so the engine thread never sees a pair
         // role combined with a dangling transport pointer.
@@ -917,6 +959,32 @@ PairRole EngineBuffer::pairRole() const {
 
 EnginePairTransport* EngineBuffer::pairTransport() const {
     return m_pPairTransport.loadAcquire();
+}
+
+bool EngineBuffer::isPairLockedFollower() const {
+    if (pairRole() != PairRole::PairFollower) {
+        return false;
+    }
+    const EnginePairTransport* pTransport = pairTransport();
+    if (pTransport == nullptr || !pTransport->isActive()) {
+        return false;
+    }
+    // Slip is never coupled: a slipping deck owns its transport until slip
+    // release (DECK_PAIR_PLAN.md R8). m_bSlipEnabledProcessing is engine
+    // thread only and intentionally not consulted here; slip_enabled is the
+    // shared source of truth.
+    return !m_pSlipButton->toBool();
+}
+
+EnginePairTransport* EngineBuffer::activePairTransport() const {
+    if (pairRole() == PairRole::Unpaired) {
+        return nullptr;
+    }
+    EnginePairTransport* pTransport = pairTransport();
+    if (pTransport == nullptr || !pTransport->isActive()) {
+        return nullptr;
+    }
+    return pTransport;
 }
 
 void EngineBuffer::processTrackLocked(
@@ -953,6 +1021,51 @@ void EngineBuffer::processTrackLocked(
     // Note: This may affect the m_playPos, play, scaler and crossfade buffer
     processSeek(paused);
 
+    // --- Deck pair transport lock (DECK_PAIR_PLAN.md 5.2 - 5.4) --------------
+    // A locked follower replays the transport the pair leader published in
+    // this very callback (EngineMixer orders leader before follower, 5.6):
+    // its position comes from the snapshot and its own transport inputs are
+    // neutralized by skipping RateControl::calculateSpeed -- that single
+    // call is where rate, temp/perm, wheel, jog and scratch2 consumption,
+    // reverse and the sync-PID funnel into the transport (fact 3.6). Slip is
+    // never coupled: a slipping follower runs its own transport until slip
+    // release (R8), so it is not locked.
+    EnginePairTransport* pPairTransport = pairTransport();
+    const PairRole pairRoleNow = pairRole();
+    const bool bPairLeader = pairRoleNow == PairRole::PairLeader &&
+            pPairTransport != nullptr && pPairTransport->isActive();
+    const bool bPairFollower = pairRoleNow == PairRole::PairFollower &&
+            pPairTransport != nullptr && pPairTransport->isActive();
+    const bool bPairLockedFollower = bPairFollower && !m_bSlipEnabledProcessing &&
+            !m_pSlipButton->toBool();
+    PairTransportSnapshot pairSnapshot;
+    const bool bPairConsumed = bPairLockedFollower &&
+            pPairTransport->consume(&pairSnapshot);
+
+    if (bPairLockedFollower && bPairConsumed) {
+        // Adopt the pair position as this buffer's start position. If the
+        // leader moved discontinuously since the last published buffer end
+        // (a seek on the leader, a slip rejoin, ...) re-anchor the follower's
+        // data plane at the pair position: a plain reader seek without a
+        // crossfade read, so no click is produced (5.4.1/5.4.2).
+        const mixxx::audio::FramePos pairPosStart(pairSnapshot.posStart);
+        const bool bPairDiscontinuity = !m_pairHaveLastPosEnd ||
+                fabs(pairPosStart.value() -
+                        m_pairLastPosEnd.value()) > kPairReanchorEpsilonFrames;
+        if (bPairDiscontinuity) {
+            m_pReadAheadManager->notifySeek(
+                    pairPosStart.toSamplePos(m_channelCount));
+            m_pScale->clear();
+        }
+        m_playPos = pairPosStart;
+        m_pairLastPosEnd = mixxx::audio::FramePos(pairSnapshot.posEnd);
+        m_pairHaveLastPosEnd = true;
+        // The scaler policy flags are the leader's, so that both members
+        // pick the same scaler mode.
+        is_scratching = pairSnapshot.scratching;
+        is_reverse = pairSnapshot.reverse;
+    }
+
     // speed is the ratio between track-time and real-time
     // (1.0 being normal rate. 2.0 plays at 2x speed -- 2 track seconds
     // pass for every 1 real second). Depending on whether
@@ -964,13 +1077,23 @@ void EngineBuffer::processTrackLocked(
     if (stereoPairCount > 1) {
         outputBufferSize = bufferSize / stereoPairCount;
     }
-    double speed = m_pRateControl->calculateSpeed(
-            baseSampleRate,
-            tempoRatio,
-            paused,
-            outputBufferSize,
-            &is_scratching,
-            &is_reverse);
+    double speed = 0.0;
+    if (bPairLockedFollower) {
+        // Skip the speed calculation entirely (see above). Without a
+        // snapshot -- e.g. while the leader is loading -- the follower holds
+        // its position and emits silence: speed and rate stay 0.
+        if (bPairConsumed) {
+            speed = pairSnapshot.speed;
+        }
+    } else {
+        speed = m_pRateControl->calculateSpeed(
+                baseSampleRate,
+                tempoRatio,
+                paused,
+                outputBufferSize,
+                &is_scratching,
+                &is_reverse);
+    }
 
     bool useIndependentPitchAndTempoScaling = false;
 
@@ -1199,6 +1322,44 @@ void EngineBuffer::processTrackLocked(
     m_actual_speed = (m_playPos - playpos_old) / (bufferSize / 2) / baseSampleRate;
     // qDebug() << "Ramped Speed" << m_actual_speed / m_speed_old;
 
+    // --- Deck pair: adopt / publish the end-of-buffer transport --------------
+    if (bPairLockedFollower) {
+        if (bPairConsumed) {
+            // Authoritative buffer end position: the follower's position
+            // *is* the pair plane, drift between the pair members is
+            // structurally impossible (5.4.1). The follower's own advance
+            // above only drives its data plane.
+            m_playPos = mixxx::audio::FramePos(pairSnapshot.posEnd);
+        }
+    } else if (bPairLeader) {
+        // Publish the pair plane (5.2/5.3): while the leader itself slips,
+        // its slip plane -- which keeps advancing, loop and seek aware,
+        // however far the leader's audible transport wanders --; otherwise
+        // the leader's main plane.
+        PairTransportSnapshot published;
+        if (m_bSlipEnabledProcessing) {
+            published.posStart = m_slipPosAtBufferStart.value();
+            published.posEnd = m_slipPos.value();
+            published.rate = m_dSlipRate;
+            published.speed =
+                    baseSampleRate > 0.0 ? m_dSlipRate / baseSampleRate : 0.0;
+            // The pair plane keeps advancing while the leader audibly slips
+            // away; the other member keeps playing it (R8).
+            published.playing = true;
+            published.scratching = false;
+            published.reverse = m_dSlipRate < 0.0;
+        } else {
+            published.posStart = playpos_old.value();
+            published.posEnd = m_playPos.value();
+            published.rate = rate;
+            published.speed = speed;
+            published.playing = !paused;
+            published.scratching = is_scratching;
+            published.reverse = is_reverse;
+        }
+        pPairTransport->publish(published);
+    }
+
     for (const auto& pControl : std::as_const(m_engineControls)) {
         // m_playPos is already updated here and points to the end of the played buffer
         pControl->setFrameInfo(m_playPos, trackEndPosition, m_trackSampleRateOld);
@@ -1225,7 +1386,11 @@ void EngineBuffer::processTrackLocked(
     bool end_of_track = atEnd && !backwards;
 
     // If playbutton is pressed and we're at the end of track release play button
-    if (m_playButton->toBool() && end_of_track) {
+    // A locked follower never releases its own play state: it evaluates the
+    // end of track identically on the pair position, and the leader's
+    // release arrives mirrored from the bridge -- releasing on both members
+    // would only ping-pong (5.4.5, T21).
+    if (!bPairLockedFollower && m_playButton->toBool() && end_of_track) {
         m_playButton->set(0.);
     }
 
@@ -1323,6 +1488,9 @@ void EngineBuffer::processSlip(std::size_t bufferSize) {
 
     // Increment slip position even if it was just toggled -- this ensures the position is correct.
     if (enabled) {
+        // The slip position at the start of this buffer is the pair plane
+        // while the deck is a slipping pair leader (DECK_PAIR_PLAN.md 5.2).
+        m_slipPosAtBufferStart = m_slipPos;
         // `bufferSize` originates from `SoundManager::onDeviceOutputCallback`
         // and is always a multiple of channel count, so we can safely use integer division
         // to find the number of frames per buffer here.
@@ -1557,7 +1725,13 @@ void EngineBuffer::updateIndicators(double speed, std::size_t bufferSize) {
     if (m_samplesSinceLastIndicatorUpdate >
             (mixxx::kEngineChannelOutputCount * m_pSampleRate->get() /
                     kPlaypositionUpdateRate)) {
-        m_playposSlider->set(fFractionalPlaypos);
+        if (!isPairLockedFollower()) {
+            // A locked follower does not publish its own play position: the
+            // pair leader's playposition arrives through the bridge mirror,
+            // and concurrent writers would fight over the control
+            // (DECK_PAIR_PLAN.md 5.4.6, deviation note 9.11).
+            m_playposSlider->set(fFractionalPlaypos);
+        }
         m_pCueControl->updateIndicators();
         m_samplesSinceLastIndicatorUpdate = 0;
     }

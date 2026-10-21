@@ -92,6 +92,7 @@ public slots:
   void slotControlFastBack(double);
 
 private:
+  bool isPairLockedFollower();
   void processTempRate(const size_t bufferSamples);
   double getJogFactor() const;
   double getWheelFactor() const;

@@ -57,6 +57,27 @@ class DeckPairManagerTest : public DeckPairTestBase {
         ASSERT_NE(nullptr, pConfigured);
         pConfigured->forceSet(1.0);
     }
+
+    /// Since the Phase 2 transport lock the members of a pair share their
+    /// play state: the follower's commands are relayed to the leader and the
+    /// leader's play state is mirrored back. The one supported way for a
+    /// single member to play while the partner is stopped is slip -- a
+    /// slipping follower drives its own transport and its commands stay
+    /// local (R8). The "load when deck playing" tests use this to build a
+    /// playing partner.
+    void makeFollowerPlayLocally(int leaderIndex, int followerIndex) {
+        // Start from a clearly stopped pair.
+        setControl(leaderIndex, QStringLiteral("play"), 0.0);
+        ProcessBuffer();
+        ASSERT_EQ(0.0, control(followerIndex, QStringLiteral("play")));
+        // Slip first: from now on the bridge is disconnected for this member.
+        setControl(followerIndex, QStringLiteral("slip_enabled"), 1.0);
+        ProcessBuffer();
+        setControl(followerIndex, QStringLiteral("play"), 1.0);
+        ProcessBuffer();
+        ASSERT_EQ(1.0, control(followerIndex, QStringLiteral("play")));
+        ASSERT_EQ(0.0, control(leaderIndex, QStringLiteral("play")));
+    }
 };
 
 // T2: pairing is initiated from either deck; the deck the write lands on is
@@ -243,9 +264,9 @@ TEST_F(DeckPairManagerTest, PropagatedLoadHonoursLoadWhenDeckPlaying) {
     expectPaired(0); // leader deck 1, follower deck 3
     ASSERT_TRUE(waitForEngineTrack(2, deck(0)->getLoadedTrack()));
 
-    // The follower plays while the leader is stopped. That is possible as long
-    // as the transport lock does not yet keep the play states together.
-    setPlaying(2, true);
+    // The follower plays (locally, by slipping -- see the helper) while the
+    // leader is stopped.
+    makeFollowerPlayLocally(0, 2);
     ASSERT_EQ(1.0, control(2, QStringLiteral("play")));
 
     // Reject: the partner keeps both its track and its playback.
@@ -290,7 +311,7 @@ TEST_F(DeckPairManagerTest, EjectHonoursLoadWhenDeckPlaying) {
     registerDecks(4);
     expectPaired(0);
     ASSERT_TRUE(waitForEngineTrack(2, deck(0)->getLoadedTrack()));
-    setPlaying(2, true);
+    makeFollowerPlayLocally(0, 2);
     ASSERT_EQ(1.0, control(2, QStringLiteral("play")));
 
     // Reject: the stopped member is ejected, the playing partner is left alone.
@@ -305,10 +326,14 @@ TEST_F(DeckPairManagerTest, EjectHonoursLoadWhenDeckPlaying) {
     // Allow: ejecting the pair clears the playing partner as well, stopping it.
     config()->setValue(kConfigKeyLoadWhenDeckPlaying,
             static_cast<int>(LoadWhenDeckPlaying::Allow));
+    // The partner is still playing (and the leader is empty). A pair load
+    // restores the leader's track and keeps the partner playing.
     loadOnDeck(0, m_pTrackB);
     ASSERT_EQ(m_pTrackB, deck(2)->getLoadedTrack());
-    // Playback resumes once the asynchronous load has finished.
+    // Playback resumes once the asynchronous load has finished. The load also
+    // ends the follower's local slip, so the pair is fully bridged again.
     ASSERT_TRUE(waitForEngineTrack(2, m_pTrackB));
+    ProcessBuffer();
     ASSERT_EQ(1.0, control(2, QStringLiteral("play")));
 
     deck(0)->slotEjectTrack(1.0);

@@ -319,6 +319,65 @@ void EngineMixer::processChannels(std::size_t bufferSize) {
         }
     }
 
+    // Deck pairs: a pair follower replays the transport its leader publishes,
+    // so the leader must be processed earlier in *this* callback -- otherwise
+    // the follower plays a snapshot that is one buffer old, a permanent
+    // one-buffer phase offset between the pair members
+    // (DECK_PAIR_PLAN.md 5.6). There are at most two pairs, so this small
+    // post-pass over the freshly built list is O(1) work per pair.
+    for (bool pairReordered = true; pairReordered;) {
+        pairReordered = false;
+        for (int followerIdx = activeChannelsStartIndex;
+                followerIdx < m_activeChannels.size() && !pairReordered;
+                ++followerIdx) {
+            ChannelInfo* pFollowerInfo = m_activeChannels.at(followerIdx);
+            EngineBuffer* pFollowerBuffer = pFollowerInfo
+                    ? pFollowerInfo->m_pChannel->getEngineBuffer()
+                    : nullptr;
+            if (pFollowerBuffer == nullptr ||
+                    pFollowerBuffer->pairRole() != PairRole::PairFollower) {
+                continue;
+            }
+            EnginePairTransport* pTransport =
+                    pFollowerBuffer->activePairTransport();
+            if (pTransport == nullptr) {
+                continue;
+            }
+            for (int leaderIdx = activeChannelsStartIndex;
+                    leaderIdx < m_activeChannels.size();
+                    ++leaderIdx) {
+                if (leaderIdx == followerIdx) {
+                    continue;
+                }
+                ChannelInfo* pLeaderInfo = m_activeChannels.at(leaderIdx);
+                EngineBuffer* pLeaderBuffer = pLeaderInfo
+                        ? pLeaderInfo->m_pChannel->getEngineBuffer()
+                        : nullptr;
+                if (pLeaderBuffer == nullptr ||
+                        pLeaderBuffer->pairRole() != PairRole::PairLeader ||
+                        pLeaderBuffer->activePairTransport() != pTransport) {
+                    continue;
+                }
+                if (followerIdx != leaderIdx + 1) {
+                    // Move the follower into the slot directly behind its
+                    // leader by rotating the covered range; the channels in
+                    // between keep their relative order.
+                    if (leaderIdx < followerIdx) {
+                        std::rotate(m_activeChannels.begin() + leaderIdx + 1,
+                                m_activeChannels.begin() + followerIdx,
+                                m_activeChannels.begin() + followerIdx + 1);
+                    } else {
+                        std::rotate(m_activeChannels.begin() + followerIdx,
+                                m_activeChannels.begin() + followerIdx + 1,
+                                m_activeChannels.begin() + leaderIdx + 1);
+                    }
+                    pairReordered = true;
+                }
+                break;
+            }
+        }
+    }
+
     // Now that the list is built and ordered, do the processing.
     for (int i = activeChannelsStartIndex; i < m_activeChannels.size(); ++i) {
         ChannelInfo* pChannelInfo = m_activeChannels[i];
@@ -359,6 +418,12 @@ void EngineMixer::processChannels(std::size_t bufferSize) {
             });
 }
 
+bool EngineMixer::isEngineCallbackThread() const {
+    return m_bInEngineCallback.load(std::memory_order_acquire) &&
+            m_pEngineThread.load(std::memory_order_acquire) ==
+            QThread::currentThread();
+}
+
 void EngineMixer::process(const std::size_t bufferSize) {
     DEBUG_ASSERT(bufferSize <= static_cast<int>(kMaxEngineSamples));
 
@@ -367,6 +432,16 @@ void EngineMixer::process(const std::size_t bufferSize) {
         QThread::currentThread()->setObjectName("Engine");
         haveSetName = true;
     }
+    m_pEngineThread.store(QThread::currentThread(), std::memory_order_release);
+    // Marks the whole callback span: CO observers (e.g. the deck pair bridge)
+    // use isEngineCallbackThread() to recognise engine-originated writes.
+    m_bInEngineCallback.store(true, std::memory_order_release);
+    struct CallbackGuard {
+        std::atomic<bool>& flag;
+        ~CallbackGuard() {
+            flag.store(false, std::memory_order_release);
+        }
+    } callbackGuard{m_bInEngineCallback};
     // Trace t("EngineMixer::process");
 
     bool mainEnabled = m_pMainEnabled->toBool();

@@ -267,6 +267,22 @@ class EngineBuffer : public EngineObject {
     bool isPaired() const {
         return pairRole() != PairRole::Unpaired;
     }
+
+    /// True while this buffer is the follower of an active pair and is not
+    /// slipping: its transport is replayed from the pair leader's snapshot
+    /// (DECK_PAIR_PLAN.md 5.2). Slip is never coupled, so a slipping
+    /// follower owns its transport until slip is released (R8).
+    ///
+    /// Thread-safe: consults only the role/active atomics and the
+    /// slip_enabled control, therefore the write-side gates (slots which
+    /// may run inline on the thread of the writer) use it as well.
+    bool isPairLockedFollower() const;
+
+    /// The buffer's pair transport, but only while it actively participates
+    /// in an engaged pair (role set and pair active). Used by EngineMixer to
+    /// order the pair leader before its follower in the audio callback
+    /// (DECK_PAIR_PLAN.md 5.6).
+    EnginePairTransport* activePairTransport() const;
     /// @}
 
   public slots:
@@ -512,6 +528,20 @@ class EngineBuffer : public EngineObject {
     // the pointer and the role is safe from the engine thread.
     QAtomicPointer<EnginePairTransport> m_pPairTransport;
     QAtomicInteger<quint8> m_pairRole = static_cast<quint8>(PairRole::Unpaired);
+
+    // Deck pair transport lock state, engine thread only (consumed while the
+    // buffer is a locked pair follower):
+    // End position of the last snapshot the follower consumed. A leader which
+    // advances continuously publishes a posStart equal to its previous
+    // posEnd, so a deviation means the pair plane jumped (leader seek, slip
+    // rejoin, ...): the follower then re-anchors its reader silently
+    // (DECK_PAIR_PLAN.md 5.4.1).
+    bool m_pairHaveLastPosEnd = false;
+    mixxx::audio::FramePos m_pairLastPosEnd;
+    static constexpr double kPairReanchorEpsilonFrames = 1e-9;
+    // Slip position at the beginning of the buffer: the pair plane the
+    // leader publishes while itself slipping (DECK_PAIR_PLAN.md 5.2).
+    mixxx::audio::FramePos m_slipPosAtBufferStart = mixxx::audio::kStartFramePos;
 
     // Is true if the previous buffer was silent due to pausing
     QAtomicInt m_iTrackLoading;

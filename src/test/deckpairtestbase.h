@@ -18,6 +18,7 @@
 #include "mixer/deck.h"
 #include "mixer/deckpairmanager.h"
 #include "test/mockedenginebackendtest.h"
+#include "track/beats.h"
 #include "track/track.h"
 
 /// Fixture for the deck pair tests.
@@ -55,6 +56,13 @@ class DeckPairTestBase : public MockedEngineBackendTest {
         m_pTrackB = Track::newTemporary(trackLocation);
         m_pTrackC = Track::newTemporary(trackLocation);
 
+        // A constant beat grid makes quantize, beatloops and beatjumps
+        // meaningful for the pair tests. sine-30.wav is 44100 Hz; the grid is
+        // attached before the decks load so the engine controls see it.
+        attachBeatGrid(m_pTrackA);
+        attachBeatGrid(m_pTrackB);
+        attachBeatGrid(m_pTrackC);
+
         loadTrack(m_pMixerDeck1.get(), m_pTrackA);
         loadTrack(m_pMixerDeck2.get(), m_pTrackA);
         loadTrack(m_pMixerDeck3.get(), m_pTrackB);
@@ -79,6 +87,13 @@ class DeckPairTestBase : public MockedEngineBackendTest {
         for (int i = 0; i < count; ++i) {
             m_pPairManager->addDeck(i, deck(i));
         }
+    }
+
+    static void attachBeatGrid(const TrackPointer& pTrack) {
+        pTrack->trySetBeats(mixxx::Beats::fromConstTempo(
+                mixxx::audio::SampleRate(44100),
+                mixxx::audio::kStartFramePos,
+                mixxx::Bpm(120.0)));
     }
 
     /// Deck index is 0-based, groups are [Channel1] .. [Channel4].

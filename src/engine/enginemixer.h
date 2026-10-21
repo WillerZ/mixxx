@@ -32,6 +32,7 @@ class EngineEffectsManager;
 class EngineSync;
 class EngineTalkoverDucking;
 class EngineDelay;
+class QThread;
 
 // The number of channels to pre-allocate in various structures in the
 // engine. Prevents memory allocation in EngineMixer::addChannel.
@@ -75,6 +76,21 @@ class EngineMixer : public QObject, public AudioSource {
     void onInputDisconnected(const AudioInput& input);
 
     void process(const std::size_t bufferSize);
+
+    /// The audio callback thread ("Engine") from the first process() call on,
+    /// nullptr before the engine has run. Engine-thread CO writes are internal
+    /// status updates -- e.g. the deck pair bridge refuses to treat them as
+    /// user commands, while writes from every other thread (GUI, controller
+    /// engine, ...) are commands.
+    QThread* engineThread() const {
+        return m_pEngineThread.load(std::memory_order_acquire);
+    }
+
+    /// True while called from inside an EngineMixer::process() running on the
+    /// audio callback thread: a CO write seen now originates from the engine
+    /// itself, not from a user. In the unit tests process() runs on the main
+    /// thread and the callback flag keeps the distinction intact.
+    bool isEngineCallbackThread() const;
 
     // Add an EngineChannel to the mixing engine. This is not thread safe --
     // only call it before the engine has started mixing.
@@ -337,6 +353,11 @@ class EngineMixer : public QObject, public AudioSource {
     CSAMPLE_GAIN m_balleftOld;
     CSAMPLE_GAIN m_balrightOld;
     std::atomic<unsigned int> m_numMicsConfigured;
+    // Thread identity of the audio callback, set by process() (see the
+    // public engineThread() accessor), plus the running flag behind
+    // isEngineCallbackThread().
+    std::atomic<QThread*> m_pEngineThread{nullptr};
+    std::atomic<bool> m_bInEngineCallback{false};
     const ChannelHandleAndGroup m_mainHandle;
     const ChannelHandleAndGroup m_headphoneHandle;
     const ChannelHandleAndGroup m_mainOutputHandle;

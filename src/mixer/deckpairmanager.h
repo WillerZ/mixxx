@@ -87,6 +87,21 @@ class DeckPairManager : public QObject {
         std::vector<std::unique_ptr<ControlProxy>> pRefusedAuthorities;
     };
 
+    /// One bridged control of a pair. Both proxies double as write objects so
+    /// that the control objects' self-echo suppression applies to the bridge
+    /// itself; echoes are further quiesced by equality -- a bridge write is
+    /// skipped when its target already carries the value
+    /// (DECK_PAIR_PLAN.md 5.5 / 9.11 b), which is what stops trigger buttons
+    /// (they re-emit on every write) from ping-ponging the pair.
+    struct BridgeEntry {
+        QString item;
+        /// True for mirrors of owner-only (read-only) status controls, which
+        /// only accept the owner's forceSet protocol.
+        bool forced = false;
+        std::unique_ptr<ControlProxy> pFollower; // listener: relay / writer: mirror
+        std::unique_ptr<ControlProxy> pLeader;   // writer: relay / listener: mirror
+    };
+
     /// One pair slot: decks 1+3 (slot 0) and decks 2+4 (slot 1).
     struct Pair {
         int slotIndex = -1;
@@ -96,6 +111,15 @@ class DeckPairManager : public QObject {
         // Static lifetime: the address is handed to the engine buffers, so it
         // must never change and the object is never destroyed.
         EnginePairTransport transport;
+        // The CO bridge (Phase 2 subset of DECK_PAIR_PLAN.md 5.5): transport
+        // commands relayed follower -> leader, statuses mirrored leader ->
+        // follower. Built on formation, destroyed on disband, main thread
+        // only. Slip disconnects the whole bridge in both directions: a
+        // slipping follower behaves exactly like a single deck, and its
+        // replica re-anchors from the leader when slip releases (R8, 9.11 m).
+        std::vector<std::unique_ptr<BridgeEntry>> relays;
+        std::vector<std::unique_ptr<BridgeEntry>> mirrors;
+        std::unique_ptr<ControlProxy> pFollowerSlipEnabled;
     };
 
     Member* member(const QString& group) const;
@@ -124,6 +148,25 @@ class DeckPairManager : public QObject {
     void disarmPair(Pair& pair);
     void disbandAllPairs();
 
+    /// Builds / tears down the CO bridge of one pair (main thread).
+    void buildBridge(Pair& pair, Member& leader, Member& follower);
+    void clearBridge(Pair& pair);
+    /// Adopts the leader's current mirror statuses on the follower once
+    /// (bridge formation and follower slip release, 9.11 m).
+    void refreshMirrorValues(Pair& pair);
+    /// Relays one follower command to the leader (F -> L, 5.5).
+    void slotBridgeRelay(Pair* pPair, BridgeEntry* pEntry, double value);
+    /// Mirrors one leader status onto the follower (L -> F, 5.5).
+    void slotBridgeMirror(Pair* pPair, BridgeEntry* pEntry, double value);
+    /// Writes an owner-only (read-only) mirror status the way its engine
+    /// owner writes it.
+    static void forceMirrorValue(
+            const QString& followerGroup, const QString& item, double value);
+    QString activePairMemberGroup(int deckIndex) const;
+    /// Switches pre-existing follower-side transport authorities (sync,
+    /// vinyl control) off at pair formation (5.8).
+    void neutralizeFollowerAuthorities(Member& follower);
+
     /// Makes both members hold the leader's track. A leader without a track
     /// adopts the follower's track instead, so that forming a pair never
     /// silently discards a loaded track.
@@ -137,9 +180,8 @@ class DeckPairManager : public QObject {
     /// deck which is still playing.
     static void stopDeck(Deck* pDeck);
 
-    // Both are unused in Phase 1 and kept for the follow-up phases: the CO
-    // bridge reads preferences, and pair lookups by group go through the
-    // EngineMixer.
+    // The preferences back the "load when deck playing" gate; the EngineMixer
+    // identifies the audio callback thread for the bridge (9.11 h).
     UserSettingsPointer m_pConfig;
     EngineMixer* m_pEngine;
     // std::vector rather than QVector: neither holder is copyable.

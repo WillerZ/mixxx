@@ -9,6 +9,7 @@
 #include "control/controlttrotary.h"
 #include "engine/controls/bpmcontrol.h"
 #include "engine/controls/enginecontrol.h"
+#include "engine/enginebuffer.h"
 #include "engine/positionscratchcontroller.h"
 #include "mixer/playermanager.h"
 #include "moc_ratecontrol.cpp"
@@ -285,17 +286,46 @@ double RateControl::getPermanentRateChangeFineAmount() {
     return m_dPermanentRateChangeFine.getValue();
 }
 
+bool RateControl::isPairLockedFollower() {
+    EngineBuffer* pBuffer = getEngineBuffer();
+    return pBuffer != nullptr && pBuffer->isPairLockedFollower();
+}
+
 void RateControl::slotRateRangeChanged(double) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     // update RateSlider with the new Range value butdo not change m_pRateRatio
     slotRateRatioChanged(m_pRateRatio->get());
 }
 
 void RateControl::slotRateSliderChanged(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     double rateRatio = 1.0 + m_pRateDir->get() * m_pRateRange->get() * v;
     m_pRateRatio->set(rateRatio);
 }
 
 void RateControl::slotRateRatioChanged(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     double rateRange = m_pRateRange->get();
     if (rateRange > 0.0) {
         double newRate = m_pRateDir->get() * (v - 1) / rateRange;
@@ -316,6 +346,14 @@ void RateControl::slotReverseRollActivate(double v) {
 }
 
 void RateControl::slotControlFastForward(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     //qDebug() << "slotControlFastForward(" << v << ")";
     if (v > 0.0) {
         m_pRateSearch->set(4.0);
@@ -325,6 +363,14 @@ void RateControl::slotControlFastForward(double v) {
 }
 
 void RateControl::slotControlFastBack(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     //qDebug() << "slotControlFastBack(" << v << ")";
     if (v > 0.0) {
         m_pRateSearch->set(-4.0);
@@ -334,6 +380,14 @@ void RateControl::slotControlFastBack(double v) {
 }
 
 void RateControl::slotControlRatePermDown(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     // Adjusts temp rate down if button pressed
     if (v > 0.0) {
         m_pRateSlider->set(m_pRateSlider->get() -
@@ -343,6 +397,14 @@ void RateControl::slotControlRatePermDown(double v) {
 }
 
 void RateControl::slotControlRatePermDownSmall(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     // Adjusts temp rate down if button pressed
     if (v > 0.0) {
         m_pRateSlider->set(m_pRateSlider->get() -
@@ -352,6 +414,14 @@ void RateControl::slotControlRatePermDownSmall(double v) {
 }
 
 void RateControl::slotControlRatePermUp(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     // Adjusts temp rate up if button pressed
     if (v > 0.0) {
         m_pRateSlider->set(m_pRateSlider->get() +
@@ -361,6 +431,14 @@ void RateControl::slotControlRatePermUp(double v) {
 }
 
 void RateControl::slotControlRatePermUpSmall(double v) {
+    if (isPairLockedFollower()) {
+        // The pair leader owns the tempo while this deck is a locked pair
+        // follower: the command is relayed there and the leader's values come
+        // back mirrored; recomputing locally from the frozen internal rate
+        // state would fight the mirror with stale echoes
+        // (DECK_PAIR_PLAN.md 5.5, deviation note 9.11 d).
+        return;
+    }
     // Adjusts temp rate up if button pressed
     if (v > 0.0) {
         m_pRateSlider->set(m_pRateSlider->get() +

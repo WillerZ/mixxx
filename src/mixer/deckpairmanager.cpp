@@ -9,6 +9,7 @@
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
 #include "engine/channels/enginedeck.h"
+#include "engine/controls/loopingcontrol.h"
 #include "engine/enginebuffer.h"
 #include "engine/enginemixer.h"
 #include "engine/sync/syncable.h"
@@ -52,6 +53,160 @@ const QStringList kRefusedFollowerPlainItems = {
 /// The controls whose engine side needs an explicit undo request.
 bool isSyncAuthorityItem(const QString& item) {
     return item.startsWith(QLatin1String("sync_"));
+}
+
+/// Command keys relayed from the pair follower to the pair leader
+/// (DECK_PAIR_PLAN.md 5.5). Phase 2 scope: the transport command set needed
+/// to drive and verify the transport lock (tests T9 - T15, T21, T24, T39);
+/// the remaining cue/hotcue variants, scratch2/jog accumulator steering and
+/// key/pitch commands join with the full Phase 3 table. Slip keys must never
+/// appear in this table in either direction (R8; T30 asserts it).
+const QStringList& phase2RelayItems() {
+    static const QStringList items = []() {
+        QStringList relay = {
+                QStringLiteral("play"),
+                QStringLiteral("start_play"),
+                QStringLiteral("start_stop"),
+                QStringLiteral("stop"),
+                QStringLiteral("start"),
+                QStringLiteral("end"),
+                QStringLiteral("playposition"),
+                QStringLiteral("repeat"),
+                QStringLiteral("quantize"),
+                QStringLiteral("loop_enabled"),
+                QStringLiteral("loop_exit"),
+                QStringLiteral("loop_halve"),
+                QStringLiteral("loop_double"),
+                QStringLiteral("beatloop_size"),
+                QStringLiteral("beatloop_activate"),
+                QStringLiteral("beatjump_forward"),
+                QStringLiteral("beatjump_backward"),
+                QStringLiteral("beatjump_size"),
+                QStringLiteral("rate"),
+                // rate_ratio is relayed as the universal safety net: every
+                // rate-moving gesture on the follower - the pitch slider
+                // directly, but e.g. also a user BPM adjust through
+                // BpmControl - ends in rate_ratio, and the follower's own
+                // RateControl recomputation is gated while locked (deviation
+                // note 9.11 d). Without this relay such a gesture would not
+                // move the pair, and R7 demands that it does.
+                QStringLiteral("rate_ratio"),
+                // Note: this tree calls the rate-range control "rateRange"
+                // (upstream main: "rate_range").
+                QStringLiteral("rateRange"),
+                QStringLiteral("rate_dir"),
+                QStringLiteral("rate_temp_up"),
+                QStringLiteral("rate_temp_down"),
+                QStringLiteral("rate_temp_up_small"),
+                QStringLiteral("rate_temp_down_small"),
+                QStringLiteral("rate_perm_up"),
+                QStringLiteral("rate_perm_down"),
+                QStringLiteral("rate_perm_up_small"),
+                QStringLiteral("rate_perm_down_small"),
+                QStringLiteral("reverse"),
+                QStringLiteral("fwd"),
+                QStringLiteral("back"),
+        };
+        for (int hotcue = 0; hotcue < 8; ++hotcue) {
+            relay << QStringLiteral("hotcue_%1_activate").arg(hotcue)
+                  << QStringLiteral("hotcue_%1_setcue").arg(hotcue);
+        }
+        for (const double size : LoopingControl::getBeatSizes()) {
+            relay << QStringLiteral("beatloop_%1_activate").arg(size);
+        }
+        return relay;
+    }();
+    return items;
+}
+
+/// Echo guard for bridge writes (bench finding, DECK_PAIR_PLAN.md 9.11 l):
+/// while the bridge itself is writing a target control, the relay must not
+/// treat the resulting change as a new command. Equality quiescence alone is
+/// not enough in production, where mirrors are queued to the main loop while
+/// relays run inline on the writer thread: a mirror that lands late carries a
+/// stale value, differs from the user's newest one, and would be relayed back
+/// to the leader - a feedback loop between two stale-ghost streams which the
+/// bench heard as a pitch-fader limit cycle. The marker is per thread: a
+/// mirror echo is *delivery*, never a command, while user writes on the GUI or
+/// controller thread always see a free (zero) depth.
+thread_local int t_bridgeWriteDepth = 0;
+
+class BridgeWriteGuard {
+  public:
+    BridgeWriteGuard() {
+        ++t_bridgeWriteDepth;
+    }
+    ~BridgeWriteGuard() {
+        --t_bridgeWriteDepth;
+    }
+    BridgeWriteGuard(const BridgeWriteGuard&) = delete;
+    BridgeWriteGuard& operator=(const BridgeWriteGuard&) = delete;
+};
+
+/// Status keys mirrored from the pair leader onto the pair follower
+/// (DECK_PAIR_PLAN.md 5.5). Phase 2 scope as above. Deliberately missing:
+/// anything slip-related, mixer-strip or stem controls, sync/vinyl,
+/// `pair_enabled` itself, and the engine-internal values the follower
+/// recomputes coherently at the pair position (playposition is the one
+/// exception, see the deviation note in DECK_PAIR_PLAN.md 9.11: a locked
+/// follower stops writing its own playposition, so the leader's is
+/// mirrored to keep it alive for skins and controllers).
+const QStringList& phase2MirrorItems() {
+    static const QStringList items = []() {
+        QStringList mirror = {
+                QStringLiteral("play"),
+                QStringLiteral("play_indicator"),
+                QStringLiteral("play_latched"),
+                QStringLiteral("cue_indicator"),
+                QStringLiteral("playposition"),
+                // The loop points precede loop_enabled on purpose: the bulk
+                // refreshes write through the follower's request path, and
+                // its LoopingControl refuses a loop enable without a valid
+                // region (a cold replica at slip release has none until the
+                // points land, 9.11 m). Event-by-event delivery is already
+                // ordered this way by the leader's own engine.
+                QStringLiteral("loop_start_position"),
+                QStringLiteral("loop_end_position"),
+                QStringLiteral("loop_enabled"),
+                QStringLiteral("beatloop_size"),
+                QStringLiteral("cue_point"),
+                QStringLiteral("quantize"),
+                QStringLiteral("repeat"),
+                QStringLiteral("rate"),
+                QStringLiteral("rate_ratio"),
+                QStringLiteral("reverse"),
+        };
+        for (int hotcue = 0; hotcue < 8; ++hotcue) {
+            mirror << QStringLiteral("hotcue_%1_status").arg(hotcue)
+                   << QStringLiteral("hotcue_%1_position").arg(hotcue)
+                   << QStringLiteral("hotcue_%1_type").arg(hotcue)
+                   << QStringLiteral("hotcue_%1_color").arg(hotcue);
+        }
+        for (const double size : LoopingControl::getBeatSizes()) {
+            mirror << QStringLiteral("beatloop_%1_enabled").arg(size);
+        }
+        return mirror;
+    }();
+    return items;
+}
+
+/// Status controls which their engine owner declares read-only (they are
+/// written through `forceSet`). A plain `set()` would be refused with a
+/// warning, so the mirror writes those like the owner itself does -- always
+/// quiesced like every other bridge write, so a forced status write never
+/// echoes back.
+bool isOwnerOnlyMirrorItem(const QString& item) {
+    if (item == QLatin1String("play_latched")) {
+        return true;
+    }
+    if (item.startsWith(QLatin1String("hotcue_"))) {
+        return item.endsWith(QLatin1String("_status")) ||
+                item.endsWith(QLatin1String("_type"));
+    }
+    if (item.startsWith(QLatin1String("beatloop_"))) {
+        return item.endsWith(QLatin1String("_enabled"));
+    }
+    return false;
 }
 
 /// `[ChannelN], pair_enabled` is only meaningful for real decks.
@@ -381,6 +536,11 @@ void DeckPairManager::formPair(Member& leader, Member& follower) {
     pPair->leaderDeckIndex = leader.deckIndex;
     pPair->followerDeckIndex = follower.deckIndex;
 
+    // A follower which enters the pair with sync or vinyl control already
+    // active has to give up that authority now, not only on future writes:
+    // its tempo and transport come from the pair leader (5.8).
+    neutralizeFollowerAuthorities(follower);
+
     // Hand the shared transport over to the buffers. The objects live as long
     // as the manager, so the pointers can never dangle while flags say Unpaired.
     pPair->transport.setRoles(PairRole::PairLeader, PairRole::PairFollower);
@@ -395,6 +555,10 @@ void DeckPairManager::formPair(Member& leader, Member& follower) {
     m_bArbitrating = false;
 
     synchronizeTracks(leader, follower);
+
+    // The bridge goes up after the track adoption: the adoption load writes
+    // its own play state and must not be relayed around while it runs.
+    buildBridge(*pPair, leader, follower);
 
     emit pairEnabled(leader.group, follower.group);
 }
@@ -429,7 +593,10 @@ void DeckPairManager::disarmPair(Pair& pair) {
     Member* pLeader = memberByIndex(pair.leaderDeckIndex);
     Member* pFollower = memberByIndex(pair.followerDeckIndex);
 
-    // Clear the engine-visible flags first, then drop the pointer handoff.
+    // Teardown order (5.1): stop the bridge first, then clear the
+    // engine-visible flags, then drop the pointer handoff.
+    clearBridge(pair);
+
     pair.transport.setActive(false);
     if (pLeader && pLeader->pEngineBuffer) {
         pLeader->pEngineBuffer->setPairTransport(nullptr, PairRole::Unpaired);
@@ -731,6 +898,253 @@ void DeckPairManager::stopDeck(Deck* pDeck) {
         return;
     }
     ControlObject::set(ConfigKey(pDeck->getGroup(), QStringLiteral("play")), 0.0);
+}
+
+void DeckPairManager::buildBridge(
+        Pair& pair, Member& leader, Member& follower) {
+    VERIFY_OR_DEBUG_ASSERT(pair.active) {
+        return;
+    }
+    if (pair.pFollowerSlipEnabled == nullptr) {
+        const ConfigKey slipKey(
+                follower.group, QStringLiteral("slip_enabled"));
+        if (ControlObject::exists(slipKey)) {
+            pair.pFollowerSlipEnabled =
+                    std::make_unique<ControlProxy>(slipKey, this);
+            // Slip release re-anchors the follower's replica: the bridge was
+            // fully disconnected while slipping (9.11 m), so adopt the
+            // leader's current statuses once, exactly like at formation.
+            //
+            // Default (auto) connection, not DirectConnection: slip_enabled
+            // also changes from other threads -- a load completion resets it
+            // from the load worker thread (EngineBuffer::slotTrackLoaded), a
+            // hardware roll release from the controller thread -- and the
+            // bridge is main-thread machinery (9.11 h); a cross-thread
+            // release is therefore delivered on the main loop. From the main
+            // thread (GUI, unit tests) delivery stays direct and synchronous.
+            Pair* pPair = &pair;
+            pair.pFollowerSlipEnabled->connectValueChanged(
+                    this,
+                    [this, pPair](double value) {
+                        if (value != 0.0 || !pPair->active) {
+                            return;
+                        }
+                        // A queued delivery can land after the DJ has
+                        // pressed the next roll or slice: re-anchoring a
+                        // *slipping* follower is exactly the clobbering this
+                        // listener exists to undo, so leave the replica to
+                        // the next release.
+                        if (pPair->pFollowerSlipEnabled &&
+                                pPair->pFollowerSlipEnabled->toBool()) {
+                            return;
+                        }
+                        refreshMirrorValues(*pPair);
+                    });
+        }
+    }
+
+    auto addEntries = [this, &pair, &follower, &leader](
+                              std::vector<std::unique_ptr<BridgeEntry>>& entries,
+                              const QStringList& items,
+                              bool relay) {
+        for (const QString& item : items) {
+            const ConfigKey followerKey(follower.group, item);
+            const ConfigKey leaderKey(leader.group, item);
+            if (!ControlObject::exists(followerKey) ||
+                    !ControlObject::exists(leaderKey)) {
+                continue;
+            }
+            auto entry = std::make_unique<BridgeEntry>();
+            entry->item = item;
+            entry->forced = !relay && isOwnerOnlyMirrorItem(item);
+            entry->pFollower = std::make_unique<ControlProxy>(followerKey);
+            entry->pLeader = std::make_unique<ControlProxy>(leaderKey);
+            BridgeEntry* pEntry = entry.get();
+            Pair* pPair = &pair;
+            if (relay) {
+                // User commands arrive synchronously on the writing main
+                // thread and reach the leader with zero added latency (3.2).
+                entry->pFollower->connectValueChanged(
+                        this,
+                        [this, pPair, pEntry](double value) {
+                            slotBridgeRelay(pPair, pEntry, value);
+                        },
+                        Qt::DirectConnection);
+            } else {
+                // Statuses are display-rate values; engine-originated writes
+                // from the leader are delivered on the main thread with the
+                // default (auto) connection.
+                entry->pLeader->connectValueChanged(
+                        this,
+                        [this, pPair, pEntry](double value) {
+                            slotBridgeMirror(pPair, pEntry, value);
+                        },
+                        Qt::AutoConnection);
+            }
+            entries.push_back(std::move(entry));
+        }
+    };
+    addEntries(pair.relays, phase2RelayItems(), true);
+    addEntries(pair.mirrors, phase2MirrorItems(), false);
+
+    // Initial coherence: adopt the leader's current statuses once. The
+    // relayed values would otherwise only converge on the next change.
+    refreshMirrorValues(pair);
+
+    kLoggerDeckPair.debug() << "Bridge up:" << pair.relays.size() << "relays,"
+                            << pair.mirrors.size() << "mirrors";
+}
+
+void DeckPairManager::refreshMirrorValues(Pair& pair) {
+    // All of these writes quiesce on their own: target-equal writes are
+    // dropped by the bridge slots, and every other echo finds the value it
+    // just received already set on its target (see slotBridgeRelay).
+    const BridgeWriteGuard refreshGuard;
+    for (const auto& pEntry : pair.mirrors) {
+        if (pEntry->forced) {
+            forceMirrorValue(activePairMemberGroup(pair.followerDeckIndex),
+                    pEntry->item,
+                    pEntry->pLeader->get());
+        } else {
+            pEntry->pFollower->set(pEntry->pLeader->get());
+        }
+    }
+}
+
+void DeckPairManager::clearBridge(Pair& pair) {
+    // ControlProxies are destroyed on the thread that created them: formation
+    // and teardown both run on the main thread.
+    pair.relays.clear();
+    pair.mirrors.clear();
+    pair.pFollowerSlipEnabled.reset();
+}
+
+void DeckPairManager::slotBridgeRelay(
+        Pair* pPair, BridgeEntry* pEntry, double value) {
+    // Commands only: a CO write seen from inside the audio callback is the
+    // follower's own engine machinery (status, replica, indicator updates),
+    // never a pair command. Writes from every other thread - the GUI and,
+    // crucially, the controller engine thread, which delivers hardware input
+    // exactly like it delivers to an unpaired deck - are user commands and
+    // are relayed inline (DECK_PAIR_PLAN.md 5.5 / 9.11 h). In the unit tests
+    // the callback runs on the main thread; the callback flag keeps the
+    // distinction there as well.
+    if (m_pEngine != nullptr && m_pEngine->isEngineCallbackThread()) {
+        return;
+    }
+    if (!pPair->active) {
+        return;
+    }
+    // An echo of the bridge's own write on this thread is never a command
+    // (BridgeWriteGuard, 9.11 l): this is how the pitch-fader limit cycle of
+    // the first bench test happened.
+    if (t_bridgeWriteDepth > 0) {
+        return;
+    }
+    // Slip disconnects the command bridge: a slipping follower drives its
+    // own transport and its commands stay local (R8).
+    if (pPair->pFollowerSlipEnabled && pPair->pFollowerSlipEnabled->toBool()) {
+        return;
+    }
+    // Quiescence by equality (plus the echo guard above): a bridged write
+    // makes the target equal to its source, so a same-value echo is dropped.
+    // This is what stops the trigger buttons -- which have ignoreNops ==
+    // false and re-emit on every write -- from ping-ponging the pair
+    // (DECK_PAIR_PLAN.md 5.5, T37).
+    if (pEntry->pLeader->get() == value) {
+        return;
+    }
+    const BridgeWriteGuard writeGuard;
+    pEntry->pLeader->set(value);
+}
+
+void DeckPairManager::slotBridgeMirror(
+        Pair* pPair, BridgeEntry* pEntry, double value) {
+    // Delivered on the main thread: same-thread emissions are direct,
+    // engine-thread emissions are queued by the auto connection.
+    if (!pPair->active) {
+        return;
+    }
+    // A slipping follower is not bridged at all: the relay side already
+    // refuses follower commands while it slips (R8), and mirror writes must
+    // stop too. A mirror is an external CO write, but a slipping follower
+    // runs its live transport, which interprets such writes as commands: a
+    // mirrored playposition lands as a seek on its own plane, a mirrored
+    // loop status clobbers the deck-local roll or slice that slip engaged.
+    // Bench finding (SC Live roll/slicer pads): the leader's 45 Hz
+    // playposition mirror dragged the rolling follower back to the pair
+    // plane on nearly every buffer -- "the effect begins and is countermanded
+    // immediately" (DECK_PAIR_PLAN.md 9.11 m). On slip release the replica
+    // re-anchors through refreshMirrorValues(), so nothing stays stale.
+    if (pPair->pFollowerSlipEnabled && pPair->pFollowerSlipEnabled->toBool()) {
+        return;
+    }
+    // Freshness: a queued mirror emission can arrive after the leader has
+    // already moved on (bench finding 9.11 l). Mirroring the stale value
+    // would clobber fresher state on the follower, and since the echo of a
+    // mirror is (by design, see slotBridgeRelay) never relayed back, nothing
+    // would heal it. Drop the stale delivery instead: the newest queued
+    // emission for this control carries the leader's current value.
+    if (pEntry->pLeader->get() != value) {
+        return;
+    }
+    if (pEntry->pFollower->get() == value) {
+        return; // quiescence by equality, see slotBridgeRelay().
+    }
+    // The mirror's write is delivery, not command: mark it so its echo never
+    // re-enters the relay (9.11 l).
+    const BridgeWriteGuard writeGuard;
+    if (pEntry->forced) {
+        // Owner-only status control: there is no proxy write for these, the
+        // engine writes them with forceSet and we do the same (never
+        // touching the confirm protocol of ordinary controls).
+        forceMirrorValue(activePairMemberGroup(pPair->followerDeckIndex),
+                pEntry->item,
+                value);
+    } else {
+        pEntry->pFollower->set(value);
+    }
+}
+
+void DeckPairManager::forceMirrorValue(
+        const QString& followerGroup, const QString& item, double value) {
+    if (followerGroup.isEmpty()) {
+        return;
+    }
+    ControlObject* pControl = ControlObject::getControl(
+            ConfigKey(followerGroup, item));
+    if (pControl != nullptr) {
+        pControl->forceSet(value);
+    }
+}
+
+QString DeckPairManager::activePairMemberGroup(
+        int deckIndex) const {
+    const Member* pMember = memberByIndex(deckIndex);
+    return pMember ? pMember->group : QString();
+}
+
+void DeckPairManager::neutralizeFollowerAuthorities(Member& follower) {
+    for (const QString& item : kRefusedFollowerAuthorityItems) {
+        ControlObject* pControl = ControlObject::getControl(
+                ConfigKey(follower.group, item));
+        if (pControl != nullptr && pControl->get() != 0.0) {
+            // Through the owner: the engine state behind it is unwound and
+            // the confirmation snaps the control back to 0.
+            pControl->set(0.0);
+        }
+    }
+    for (const QString& item : kRefusedFollowerPlainItems) {
+        ControlObject* pControl = ControlObject::getControl(
+                ConfigKey(follower.group, item));
+        if (pControl != nullptr && pControl->get() != 0.0) {
+            pControl->set(0.0);
+        }
+    }
+    // Whatever sync negotiation was in flight, the follower leaves it: a
+    // follower-side tempo correction would double-correct against the pair
+    // lock (5.8).
+    follower.pEngineBuffer->requestSyncMode(SyncMode::None);
 }
 
 // End of autonomously AI-generated content; see the disclaimer at the top of
