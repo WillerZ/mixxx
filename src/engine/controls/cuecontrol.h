@@ -229,6 +229,10 @@ class CueControl : public EngineControl {
     void hotcueActivate(HotcueControl* pControl, double v, HotcueSetMode mode);
     void hotcueActivatePreview(HotcueControl* pControl, double v);
     void updateCurrentlyPreviewingIndex(int hotcueIndex);
+    /// Deck pairs: true while this deck is the locked follower of an active
+    /// pair. Preview machinery must not run on it (see the gate in
+    /// hotcueActivatePreview / cuePreview).
+    bool isPairLockedFollower() const;
     void hotcueClear(HotcueControl* pControl, double v);
     void hotcueSwap(HotcueControl* pHotcue, double v);
     void hotcuePositionChanged(HotcueControl* pControl, double newPosition);

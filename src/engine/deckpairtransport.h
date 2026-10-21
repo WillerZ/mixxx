@@ -98,6 +98,38 @@ class EnginePairTransport {
     /// True once the leader has published at least one snapshot.
     bool hasSnapshot() const;
 
+    /// \name Accumulator lane (follower -> leader)
+    ///
+    /// A transport input which its engine consumer reads-and-zeroes cannot be
+    /// relayed as a control value: on a pair the follower's consumer is gated,
+    /// so the follower's accumulator keeps whatever the latest write carried --
+    /// absolute-velocity writers (the usual controller jog contract) overwrite,
+    /// relative writers accumulate -- and every copy of that value to the leader
+    /// re-feeds deltas the leader has already applied (DECK_PAIR_PLAN.md
+    /// 9.12 i / 9.13). The lane moves the accumulation at the one point where
+    /// its meaning is defined: the follower's gated consumer performs its
+    /// regular read-and-zero once per callback and publishes exactly what it
+    /// discarded; the leader's consumer adds the lane to its own read at its
+    /// regular consumption step. Both calls run on the engine thread in their
+    /// owner's buffer processing; EngineMixer orders the leader's buffer before
+    /// the follower's, so a value published in callback N takes effect in the
+    /// leader's callback N+1 -- the same one-buffer delay a write landing just
+    /// after the leader's consumption point has on a single deck.
+    ///
+    /// Latest-wins by design: there is exactly one publish per follower
+    /// callback, so publishing re-baselines, and a leader that is loading
+    /// (nothing takes) stalls the lane at one window's value instead of
+    /// accumulating a stale lump. @{
+    /// No-ops on NaN (a real controller may send unprocessed absolute wheel
+    /// positions before it has a reference; a NaN in the lane would otherwise
+    /// poison every later window).
+    void publishAccumulated(double value);
+    /// Drains the lane, leaving zero behind.
+    double takeAccumulated();
+    /// Test hook: the pending accumulation without removing it.
+    double accumulated() const;
+    /// @}
+
   private:
     static constexpr quint32 kInitialSeq = 0;
     /// Bounded retries keep consume() wait-free: giving up is harmless because
@@ -123,6 +155,10 @@ class EnginePairTransport {
     std::atomic<quint8> m_active{0};
     std::atomic<quint8> m_roleLeader{static_cast<quint8>(PairRole::Unpaired)};
     std::atomic<quint8> m_roleFollower{static_cast<quint8>(PairRole::Unpaired)};
+    /// Accumulator lane, latest-wins; see `publishAccumulated()`. Written by
+    /// the follower's engine pass, exchanged by the leader's; atomically so a
+    /// concurrent take can never observe a torn value or lose a publish.
+    std::atomic<double> m_accumulator{0.0};
 };
 
 // End of autonomously AI-generated content; see the disclaimer at the top of

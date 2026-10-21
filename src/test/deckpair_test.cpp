@@ -4,15 +4,16 @@
 // upstream contribution: the human developer must review them, test them on a
 // real DJ setup, and submit them personally. No autonomous PRs or issues.
 //
-// Phase 2 tests for the deck pair transport lock: the pair leader publishes
-// its transport every engine callback and the pair follower replays it
-// frame-exactly, while the Phase 2 CO bridge relays transport commands from
-// the follower to the leader and mirrors the leader's play state back.
+// Tests for the deck pair transport lock and CO bridge: the pair leader
+// publishes its transport every engine callback and the pair follower replays
+// it frame-exactly, while the bridge relays commands from the follower to the
+// leader and mirrors the leader's statuses back.
 //
-// DECK_PAIR_PLAN.md tests T9 - T12, T14 - T15, T21, T24, T39. The mocked
-// fixture asserts frame-exact positions; the loop wrap and repeat tests need
-// the real reader path (the mock scaler does not run the ReadAheadManager),
-// so they run on real scalers in the audio fixture at the end of this file.
+// DECK_PAIR_PLAN.md tests T9 - T12, T14 - T20, T22 - T24, T30 (engine part),
+// T37, T39. The mocked fixture asserts frame-exact positions; the loop wrap
+// and repeat tests need the real reader path (the mock scaler does not run
+// the ReadAheadManager), so they run on real scalers in the audio fixture at
+// the end of this file.
 
 #include <gtest/gtest.h>
 
@@ -68,6 +69,12 @@ class DeckPairEngineTest : public DeckPairTestBase {
     void pulse(int deckIndex, const QString& item) {
         setControl(deckIndex, item, 1.0);
         setControl(deckIndex, item, 0.0);
+    }
+
+    /// Relative write, the way a controller or skin nudges an accumulator or
+    /// nudge-style control such as `jog` or `wheel`.
+    void addRelative(int deckIndex, const QString& item, double delta) {
+        setControl(deckIndex, item, control(deckIndex, item) + delta);
     }
 
     double playPos(int deckIndex) {
@@ -559,6 +566,733 @@ TEST_F(DeckPairEngineTest, LoadRaceReLocksOnFirstCallbackAfterLoad) {
         assertPairLocked();
         EXPECT_GT(playPos(kLeader), before);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: the command bridge. Every command class works from both decks
+// (DECK_PAIR_PLAN.md T16 - T20, T22 - T23), the relay of trigger controls is
+// echo-safe (T37), and nothing slip-related ever crosses the bridge (T30).
+// ---------------------------------------------------------------------------
+
+// T16: scratch2_enable + jog nudges from the follower. The pair plane
+// follows in both directions and stays frame-exact. `jog` is a consumer-zeroed
+// accumulator and is therefore not a bridged control at all: a locked follower
+// performs its regular read-and-zero once per callback and publishes what it
+// consumed onto the pair transport's accumulator lane, and the leader folds
+// the lane into its own jog consumption (DECK_PAIR_PLAN.md 5.4.1 / 9.13). The
+// two members' `jog` controls are consequently never written through the pair.
+// `scratch2` is a plain value copy: the scratch source owns its value
+// contract (no engine side zeroes it).
+TEST_F(DeckPairEngineTest, JogAndScratchFromFollowerMoveThePairPlane) {
+    startLockedPair();
+
+    // Baseline advance of the locked pair at rate 1.
+    double previous = playPos(kLeader);
+    ProcessBuffer();
+    const double idleAdvance = playPos(kLeader) - previous;
+    ASSERT_GT(idleAdvance, 0.0);
+
+    // Jog nudge from the follower, held for a few buffers: the value crosses
+    // on the lane (write -> follower's gated consume-and-zero publishes ->
+    // leader claims at its next consumption step) and neither member's `jog`
+    // control is ever touched through the pair.
+    previous = playPos(kLeader);
+    for (int i = 0; i < 5; ++i) {
+        addRelative(kFollower, QStringLiteral("jog"), 2.0);
+        ProcessBuffer();
+        EXPECT_DOUBLE_EQ(0.0, control(kFollower, QStringLiteral("jog")))
+                << "the follower's gated consume-and-zero must re-baseline its "
+                   "own accumulator like a single deck, callback "
+                << i;
+        EXPECT_DOUBLE_EQ(2.0, m_pPairManager->pairAccumulated(group(kFollower)))
+                << "the value the follower consumed must wait on the lane for "
+                   "the leader's consumption point, callback "
+                << i;
+        EXPECT_DOUBLE_EQ(0.0, control(kLeader, QStringLiteral("jog")))
+                << "the lane is claimed into the leader's rate, not written "
+                   "through its control, callback "
+                << i;
+        assertPairLocked();
+    }
+    // Claim the lane the leader has not reached yet so the whole nudge is in
+    // the measured advance.
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.0, m_pPairManager->pairAccumulated(group(kFollower)))
+            << "the leader's consumer must drain the lane";
+
+    // Hold a strong nudge until the rate effect reaches its steady state
+    // (one buffer of claim latency plus the jog low-pass ramp), then measure
+    // a single buffer: a held +10.0 jog runs the pair plane visibly fast.
+    // Measuring the plateau -- not a window sum -- keeps this assertion
+    // insensitive to the ramp's exact shape while still failing outright if
+    // the nudge never reaches the leader at all.
+    for (int i = 0; i < 8; ++i) {
+        setControl(kFollower, QStringLiteral("jog"), 10.0);
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    previous = playPos(kLeader);
+    ProcessBuffer();
+    const double nudgedAdvance = playPos(kLeader) - previous;
+    EXPECT_GT(nudgedAdvance, 1.05 * idleAdvance)
+            << "a jog nudge from the follower must push the pair plane";
+    EXPECT_LT(nudgedAdvance, 1.9 * idleAdvance)
+            << "the nudge bends the rate, it does not launch the plane";
+
+    // The other direction: a held negative nudge slows the pair plane. Let
+    // the positive nudge's low-pass tail decay out first, so the measurement
+    // below sees only the negative ramp.
+    for (int i = 0; i < 60; ++i) {
+        ProcessBuffer();
+    }
+    for (int i = 0; i < 14; ++i) {
+        setControl(kFollower, QStringLiteral("jog"), -10.0);
+        ProcessBuffer();
+        EXPECT_DOUBLE_EQ(0.0, control(kFollower, QStringLiteral("jog")));
+        assertPairLocked();
+    }
+    previous = playPos(kLeader);
+    ProcessBuffer();
+    const double slowedAdvance = playPos(kLeader) - previous;
+    EXPECT_LT(slowedAdvance, 0.9 * idleAdvance)
+            << "a negative jog from the follower must slow the pair plane";
+    EXPECT_GT(slowedAdvance, 0.3 * idleAdvance)
+            << "the pair plane slows down, it does not stall or reverse";
+
+    // Let the leader's jog low-pass decay out before measuring scratch
+    // speeds (the filter is RateControl's).
+    for (int i = 0; i < 20; ++i) {
+        ProcessBuffer();
+    }
+
+    // scratch2 scratch from the follower: the mode relays, the scratch2
+    // value lands on the leader, and the pair plane scratches through the
+    // audio -- frame-exact, and under the scratch speed.
+    setControl(kFollower, QStringLiteral("scratch2_enable"), 1.0);
+    ProcessBuffer();
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("scratch2_enable")))
+            << "scratch2_enable from the follower must relay to the leader";
+    setControl(kFollower, QStringLiteral("scratch2"), 0.3);
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.3, control(kLeader, QStringLiteral("scratch2")))
+            << "the scratch value from the follower must drive the leader";
+    previous = playPos(kLeader);
+    ProcessBuffer();
+    assertPairLocked();
+    const double scratched = playPos(kLeader) - previous;
+    EXPECT_GT(scratched, 0.0);
+    EXPECT_LT(scratched, idleAdvance)
+            << "in scratch2 mode the pair plane moves at the scratch speed";
+    // Zero scratch value: the pair plane holds, still frame-exact.
+    setControl(kFollower, QStringLiteral("scratch2"), 0.0);
+    ProcessBuffer();
+    previous = playPos(kLeader);
+    ProcessBuffer();
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_LT(std::fabs(playPos(kLeader) - previous), 1.0)
+            << "holding the platter (scratch2 == 0) must hold the pair plane";
+    setControl(kFollower, QStringLiteral("scratch2_enable"), 0.0);
+    ProcessBuffer();
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("scratch2_enable")));
+    // The pair resumes its normal locked transport.
+    for (int i = 0; i < 3; ++i) {
+        previous = playPos(kLeader);
+        ProcessBuffer();
+        assertPairLocked();
+        EXPECT_GT(playPos(kLeader), previous);
+    }
+}
+
+// T16b (bench rounds 2+3, findings 9.12 i / 9.13): `jog` rides the pair
+// transport's accumulator lane, not the CO bridge, because its value only has
+// a meaning at the consumer's read-and-zero -- controllers (the SC Live 4 jog
+// wheel writes `jog` directly) SET an instantaneous velocity per message while
+// skins and nudge buttons write `+=` deltas, and a copy-relay re-fed what the
+// leader had already applied (2-3x), a drain-additive relay turned the
+// absolute-velocity stream into a sum (2x). The lane must carry exactly what
+// the follower's own consumer would have consumed: the latest value for
+// absolute writers, the sum for relative writers -- once per callback, and
+// never through either member's `jog` control.
+TEST_F(DeckPairEngineTest, JogAccumulatorCrossesThePairLaneExactlyOnce) {
+    startLockedPair();
+
+    // Contract 1 -- absolute writes (controller wheel): the second write
+    // overwrites the first on the follower's CO, so the lane carries 3.0.
+    // A relay overwrote nothing: each write event crossed its own value and
+    // the leader would have seen the pair 2.0 + 3.0 = 5.0 of nudge.
+    setControl(kFollower, QStringLiteral("jog"), 2.0);
+    setControl(kFollower, QStringLiteral("jog"), 3.0);
+    EXPECT_DOUBLE_EQ(0.0, m_pPairManager->pairAccumulated(group(kFollower)))
+            << "nothing crosses before the follower's consumption point";
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.0, control(kFollower, QStringLiteral("jog")));
+    EXPECT_DOUBLE_EQ(3.0, m_pPairManager->pairAccumulated(group(kFollower)))
+            << "the lane must carry the latest velocity, not a sum of writes";
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.0, m_pPairManager->pairAccumulated(group(kFollower)))
+            << "the leader's consumer must claim the lane";
+    EXPECT_DOUBLE_EQ(0.0, control(kLeader, QStringLiteral("jog")))
+            << "the claim folds into the leader's rate, not its control";
+
+    // Contract 2 -- relative writes (skin nudge, `+=`): the burst accumulates
+    // on the follower's CO and crosses once, as its sum. A copy-relay fed
+    // 2.0 and then the cumulative 4.0 to the leader here (bench: 2-3x).
+    addRelative(kFollower, QStringLiteral("jog"), 2.0);
+    addRelative(kFollower, QStringLiteral("jog"), 2.0);
+    EXPECT_DOUBLE_EQ(4.0, control(kFollower, QStringLiteral("jog")));
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.0, control(kFollower, QStringLiteral("jog")));
+    EXPECT_DOUBLE_EQ(4.0, m_pPairManager->pairAccumulated(group(kFollower)))
+            << "a burst inside one window must cross as its sum, exactly once";
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.0, m_pPairManager->pairAccumulated(group(kFollower)));
+    assertPairLocked();
+
+    // A held nudge across windows: each window's value crosses once, and
+    // neither member's `jog` control is ever touched through the pair.
+    for (int i = 0; i < 4; ++i) {
+        setControl(kFollower, QStringLiteral("jog"), 2.0);
+        ProcessBuffer();
+        EXPECT_DOUBLE_EQ(2.0, m_pPairManager->pairAccumulated(group(kFollower)))
+                << "callback " << i;
+        EXPECT_DOUBLE_EQ(0.0, control(kLeader, QStringLiteral("jog")))
+                << "callback " << i;
+    }
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(0.0, m_pPairManager->pairAccumulated(group(kFollower)));
+    assertPairLocked();
+}
+
+// T17: jog, wheel and scratch on the LEADER. The follower is driven purely
+// through the pair snapshot: it must follow sample-exact through every one
+// of these gestures, including the scratch release ramp.
+TEST_F(DeckPairEngineTest, LeaderTransportGesturesCarryTheFollowerExactly) {
+    startLockedPair();
+
+    auto advanceOneBuffer = [&]() {
+        const double before = playPos(kLeader);
+        ProcessBuffer();
+        assertPairLocked();
+        return playPos(kLeader) - before;
+    };
+    const double idle = advanceOneBuffer();
+    ASSERT_GT(idle, 0.0);
+
+    // Jog on the leader.
+    double before = playPos(kLeader);
+    for (int i = 0; i < 5; ++i) {
+        addRelative(kLeader, QStringLiteral("jog"), 2.0);
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    EXPECT_GT(playPos(kLeader) - before, 5.0 * idle);
+
+    // Wheel on the leader (the deprecated rotary).
+    setControl(kLeader, QStringLiteral("wheel"), 0.25);
+    before = playPos(kLeader);
+    ProcessBuffer();
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_GT(playPos(kLeader) - before, 2.0 * idle * 1.1);
+    setControl(kLeader, QStringLiteral("wheel"), 0.0);
+    ProcessBuffer();
+    assertPairLocked();
+
+    // Scratch on the leader: engage scratch2, move the platter, release --
+    // the follower follows the ramp and the spinback callback-exactly.
+    setControl(kLeader, QStringLiteral("scratch2_enable"), 1.0);
+    ProcessBuffer();
+    for (int i = 0; i < 4; ++i) {
+        addRelative(kLeader, QStringLiteral("scratch2"), 0.25);
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    // Release: the release ramp / inertia phase must not unlock the pair.
+    setControl(kLeader, QStringLiteral("scratch2_enable"), 0.0);
+    for (int i = 0; i < 6; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+
+    // Two-position scratch on the leader (`scratch_position`).
+    setControl(kLeader, QStringLiteral("scratch_position_enable"), 1.0);
+    ProcessBuffer();
+    assertPairLocked();
+    for (int i = 0; i < 4; ++i) {
+        addRelative(kLeader, QStringLiteral("scratch_position"), 3000.0);
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    setControl(kLeader, QStringLiteral("scratch_position_enable"), 0.0);
+    for (int i = 0; i < 5; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    // The follower's own scratch state was never touched (no L -> F flow).
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("scratch2_enable")));
+    EXPECT_EQ(0.0,
+            control(kFollower, QStringLiteral("scratch_position_enable")));
+}
+
+// T18: hotcue preview (press and release) from the follower. The preview
+// happens on the pair plane: the leader audibly seeks to the cue and returns
+// to the parked position on release; the follower re-anchors every callback.
+TEST_F(DeckPairEngineTest, HotcuePreviewFromFollowerPreviewsOnThePairPlane) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+
+    // A hotcue at the current pair position, then park far away from it.
+    pulse(kLeader, QStringLiteral("hotcue_1_setcue"));
+    ProcessBuffer();
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("hotcue_1_status")));
+    const double cuePos = cueFrames(kLeader, QStringLiteral("hotcue_1_position"));
+
+    setControl(kFollower, QStringLiteral("playposition"), 0.4);
+    ProcessBuffer();
+    setControl(kFollower, QStringLiteral("play"), 0.0);
+    ProcessBuffer();
+    const double parked = playPos(kLeader);
+    ASSERT_EQ(0.0, control(kLeader, kPlay));
+    ASSERT_GT(std::fabs(parked - cuePos), 10.0 * kBufferSlackFrames);
+
+    // Press on the follower while stopped: the pair previews at the cue
+    // point (audible seek on the pair plane, latched preview play).
+    setControl(kFollower, QStringLiteral("hotcue_1_activate"), 1.0);
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_EQ(1.0, control(kLeader, kPlay));
+    EXPECT_NEAR(playPos(kLeader), cuePos, kBufferSlackFrames)
+            << "the leader must preview the hotcue on the pair plane";
+    ProcessBuffer();
+    assertPairLocked();
+
+    // Release: the preview ends on the pair plane. (This engine's preview
+    // release re-anchors the deck at the previewed cue point and stops --
+    // single-deck semantics; the pair contract is that it behaves exactly
+    // like one deck, not that it returns to an arbitrary parked position.)
+    setControl(kFollower, QStringLiteral("hotcue_1_activate"), 0.0);
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_EQ(0.0, control(kLeader, kPlay));
+    EXPECT_EQ(0.0, control(kFollower, kPlay));
+    EXPECT_NEAR(playPos(kLeader), cuePos, kBufferSlackFrames)
+            << "the preview release must leave the pair on the previewed "
+               "plane, exactly like a single deck";
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    // The follower never owned a preview of its own: the latched-preview
+    // state it displays is the leader's mirror.
+    EXPECT_EQ(control(kLeader, QStringLiteral("play_latched")),
+            control(kFollower, QStringLiteral("play_latched")));
+    // The pair resumes transport from there, frame-exact.
+    setControl(kLeader, kPlay, 1.0);
+    for (int i = 0; i < 3; ++i) {
+        const double before = playPos(kLeader);
+        ProcessBuffer();
+        assertPairLocked();
+        EXPECT_GT(playPos(kLeader), before);
+    }
+}
+
+// T19: reloop_toggle, loop_halve/loop_double and loop_move from the
+// follower. The loop region is a single pair state: the mirrored loop points
+// stay identical on both members through every operation.
+TEST_F(DeckPairEngineTest, LoopOperationsFromFollowerKeepOneRegion) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+
+    // Engage a 4-beat loop from the follower.
+    pulse(kFollower, QStringLiteral("beatloop_4_activate"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+
+    // Move the loop one beat forward from the follower: both loop points
+    // shift, identically.
+    const double startBefore = control(kLeader, QStringLiteral("loop_start_position"));
+    pulse(kFollower, QStringLiteral("loop_move_1_forward"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_NE(startBefore, control(kLeader, QStringLiteral("loop_start_position")))
+            << "loop_move from the follower must move the pair loop";
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+
+    // Halve from the follower: region halves, both members agree.
+    const double regionBefore = control(kLeader, QStringLiteral("loop_end_position")) -
+            control(kLeader, QStringLiteral("loop_start_position"));
+    pulse(kFollower, QStringLiteral("loop_halve"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    const double halved = control(kLeader, QStringLiteral("loop_end_position")) -
+            control(kLeader, QStringLiteral("loop_start_position"));
+    EXPECT_NEAR(regionBefore / 2.0, halved, 2.0);
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+
+    // Double from the follower: back to the original region.
+    pulse(kFollower, QStringLiteral("loop_double"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_DOUBLE_EQ(regionBefore,
+            control(kLeader, QStringLiteral("loop_end_position")) -
+                    control(kLeader, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+
+    // reloop_toggle from the follower exits the loop on both ...
+    pulse(kFollower, QStringLiteral("reloop_toggle"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("loop_enabled")));
+    // ... and re-enters the identical region.
+    pulse(kFollower, QStringLiteral("reloop_toggle"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+
+    // loop_in / loop_out from the follower re-define the region on both.
+    pulse(kFollower, QStringLiteral("loop_exit"));
+    ProcessBuffer();
+    pulse(kFollower, QStringLiteral("loop_in"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    const double inStart = control(kLeader, QStringLiteral("loop_start_position"));
+    pulse(kFollower, QStringLiteral("loop_out"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_DOUBLE_EQ(inStart, control(kLeader, QStringLiteral("loop_start_position")));
+    EXPECT_GT(control(kLeader, QStringLiteral("loop_end_position")), inStart);
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+}
+
+// T20: quantize toggled from the follower mid-run, then a loop set from the
+// follower (loop_in + loop_out). One shared quantization decision (made on
+// the leader, whose transport the pair replays) engages the loop identically
+// on both members; the quantize toggle relays through the bridge.
+TEST_F(DeckPairEngineTest, QuantizeFromFollowerSharesOneEngagementDecision) {
+    startLockedPair();
+
+    // Quantize off, from the leader; the mirror keeps the follower coherent.
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+    ASSERT_EQ(0.0, control(kFollower, QStringLiteral("quantize")));
+
+    // Unquantized loop set from the follower: the in/out points land at the
+    // pair position as-is (off-grid), and the loop engages on both members.
+    pulse(kFollower, QStringLiteral("loop_in"));
+    ProcessBuffer();
+    pulse(kFollower, QStringLiteral("loop_out"));
+    ProcessBuffer();
+    ProcessBuffer();
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    const double rawStart = control(kLeader, QStringLiteral("loop_start_position"));
+    // Off-grid: a raw in-point sits between beats (grid = 1764 engine
+    // samples: 882 frames per beat at 120 BPM, 2 samples per frame).
+    EXPECT_NE(0.0, std::fmod(rawStart, 1764.0));
+    pulse(kFollower, QStringLiteral("loop_exit"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+
+    // Toggle quantize ON from the follower: the toggle relays to the leader.
+    setControl(kFollower, QStringLiteral("quantize"), 1.0);
+    ProcessBuffer();
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("quantize")))
+            << "the quantize toggle from the follower must move the pair";
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("quantize")));
+
+    // Quantized loop set from the follower: both members hold the identical
+    // beat-aligned region and stay locked through the engagement.
+    pulse(kFollower, QStringLiteral("loop_in"));
+    ProcessBuffer();
+    pulse(kFollower, QStringLiteral("loop_out"));
+    for (int i = 0; i < 25 && control(kLeader, QStringLiteral("loop_enabled")) != 1.0;
+            ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    // One shared quantization decision on the pair's beatgrid: the in-point
+    // lands exactly on a beat of the constant 120 BPM grid anchored at
+    // frame 0 (deckpairtestbase.h).
+    EXPECT_DOUBLE_EQ(
+            0.0, std::fmod(control(kLeader, QStringLiteral("loop_start_position")), 1764.0))
+            << "quantized engagement must land on the beat grid";
+    assertPairLocked();
+}
+
+// T22: keylock and pitch_adjust from the follower re-tune the pair. The
+// follower's key/pitch displays are self-computed at the pair rate (5.4.6)
+// and must still agree with the leader's.
+TEST_F(DeckPairEngineTest, KeylockAndPitchAdjustFromFollowerRetuneThePair) {
+    startLockedPair();
+
+    // Keylock from the follower: relays, and both members agree on the mode.
+    setControl(kFollower, QStringLiteral("keylock"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("keylock")))
+            << "keylock from the follower must relay to the leader";
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("keylock")));
+
+    // Pitch adjust from the follower: one semitone up for the pair. (The
+    // `pitch` CO publishes cents in this tree: 100 == one semitone.)
+    const double pitchBefore = control(kLeader, QStringLiteral("pitch"));
+    setControl(kFollower, QStringLiteral("pitch_adjust"), 100.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    EXPECT_DOUBLE_EQ(100.0, control(kLeader, QStringLiteral("pitch_adjust")))
+            << "pitch_adjust from the follower must relay to the leader";
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("pitch_adjust")),
+            control(kFollower, QStringLiteral("pitch_adjust")));
+    EXPECT_NEAR(pitchBefore + 100.0, control(kLeader, QStringLiteral("pitch")), 2.0)
+            << "the pair pitch must follow the follower's pitch adjust";
+    // Self-computed, never mirrored -- yet consistent at the pair plane.
+    EXPECT_NEAR(control(kLeader, QStringLiteral("pitch")),
+            control(kFollower, QStringLiteral("pitch")),
+            2.0);
+
+    // Back to zero, and the pair stays frame-exact throughout.
+    setControl(kFollower, QStringLiteral("pitch_adjust"), 0.0);
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    EXPECT_DOUBLE_EQ(0.0, control(kLeader, QStringLiteral("pitch_adjust")));
+}
+
+// T23: start_play, cue_gotoandplay and play_stutter from the follower drive
+// the pair; the indicator states mirror back.
+TEST_F(DeckPairEngineTest, StartCueAndStutterFromFollowerDriveThePair) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+
+    // A cue point on the leader ...
+    pulse(kLeader, QStringLiteral("cue_set"));
+    ProcessBuffer();
+    const double cuePos = cueFrames(kLeader, QStringLiteral("cue_point"));
+    // ... then park the pair far away, stopped.
+    setControl(kFollower, QStringLiteral("playposition"), 0.6);
+    ProcessBuffer();
+    setControl(kFollower, QStringLiteral("play"), 0.0);
+    ProcessBuffer();
+    ASSERT_GT(std::fabs(playPos(kLeader) - cuePos), 10.0 * kBufferSlackFrames);
+    ASSERT_EQ(0.0, control(kLeader, QStringLiteral("play")));
+
+    // cue_gotoandplay from the follower: the pair jumps to the cue and plays.
+    pulse(kFollower, QStringLiteral("cue_gotoandplay"));
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("play")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("play")));
+    EXPECT_NEAR(playPos(kLeader), cuePos, kBufferSlackFrames);
+    ProcessBuffer();
+    assertPairLocked();
+
+    // start_play from the follower: the pair restarts at the track start.
+    pulse(kFollower, QStringLiteral("start_play"));
+    ProcessBuffer();
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_LT(playPos(kLeader), 2.0 * kBufferSlackFrames);
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("play_indicator")));
+
+    // play_stutter from the follower: the pair responds (existing single-deck
+    // stutter semantics, reached through the relay; the play state mirrors).
+    setControl(kFollower, QStringLiteral("play"), 0.0);
+    ProcessBuffer();
+    ASSERT_EQ(0.0, control(kLeader, QStringLiteral("play")));
+    setControl(kFollower, QStringLiteral("play_stutter"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("play")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("play")));
+    setControl(kFollower, QStringLiteral("play_stutter"), 0.0);
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_EQ(control(kLeader, QStringLiteral("play_indicator")),
+            control(kFollower, QStringLiteral("play_indicator")));
+}
+
+// T30 (engine part): slip is never bridged. Manual slip on the leader keeps
+// the follower a non-slipping deck riding the pair plane (the leader's slip
+// plane while it slips, 5.2); a leader-side excursion during the slip moves
+// only the leader's audible plane; a roll with mid-roll loop adoption on the
+// follower has zero effect on the leader.
+TEST_F(DeckPairEngineTest, SlipStaysOnTheDeckThatEngagedIt) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+
+    // Manual slip on the leader only.
+    setControl(kLeader, QStringLiteral("slip_enabled"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")))
+            << "slip_enabled must never cross the bridge (R8, T30)";
+    // Still locked: while the leader slips, the pair plane is the leader's
+    // slip plane and the follower rides it uninterrupted.
+    assertPairLocked();
+    double followerBefore = playPos(kFollower);
+    ProcessBuffer();
+    EXPECT_GT(playPos(kFollower), followerBefore);
+
+    // An audible-plane excursion on the leader during its slip must move
+    // only the audible plane: the follower (pair plane) advances smoothly.
+    followerBefore = playPos(kFollower);
+    setControl(kLeader, QStringLiteral("playposition"), 0.2);
+    ProcessBuffer();
+    EXPECT_GT(std::fabs(playPos(kLeader) - playPos(kFollower)),
+            100.0 * kBufferSlackFrames)
+            << "the leader excursion must not drag the pair plane";
+    EXPECT_GT(playPos(kFollower), followerBefore)
+            << "the pair plane keeps advancing during a leader excursion";
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+
+    // Leader slip release: seekExact(m_slipPos) snaps the audible plane back
+    // onto the pair plane, frame-exact on the very next callback.
+    setControl(kLeader, QStringLiteral("slip_enabled"), 0.0);
+    ProcessBuffer();
+    assertPairLocked();
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+
+    // A roll on the follower: deck-local slip engages on the follower alone.
+    setControl(kFollower, QStringLiteral("beatloop_size"), 2.0);
+    setControl(kFollower, QStringLiteral("beatlooproll_activate"), 1.0);
+    ProcessBuffer();
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("loop_enabled")));
+
+    // Mid-roll loop adoption (slipQuitAndAdopt via beatloop_activate,
+    // loopingcontrol.cpp:1759): a purely local act. The leader neither slips
+    // nor loops; the follower releases slip and re-locks onto the pair plane
+    // (its replica re-anchors, 9.11 m).
+    pulse(kFollower, QStringLiteral("beatloop_activate"));
+    ProcessBuffer();
+    ProcessBuffer();
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    assertPairLocked();
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+}
+
+// T37: bridge echo safety. A trigger CO relayed from the follower must enter
+// the leader exactly once -- trigger buttons re-emit (ignoreNops == false)
+// and the pair bridge must not ping-pong on them (ControlObject spy pattern,
+// DECK_PAIR_PLAN.md T37).
+TEST_F(DeckPairEngineTest, RelayedTriggersEnterTheLeaderExactlyOnce) {
+    startLockedPair();
+
+    struct Spy {
+        explicit Spy(const ConfigKey& key)
+                : pProxy(std::make_unique<ControlProxy>(key)) {
+            pProxy->connectValueChanged(
+                    pProxy.get(),
+                    [this](double value) { values.append(value); },
+                    Qt::DirectConnection);
+        }
+        void clear() {
+            values.clear();
+        }
+        std::unique_ptr<ControlProxy> pProxy;
+        QVector<double> values;
+    };
+
+    Spy spyLoopIn(ConfigKey(group(kLeader), QStringLiteral("loop_in")));
+    Spy spyBeatLoop(ConfigKey(group(kLeader), QStringLiteral("beatloop_4_activate")));
+
+    // Press + release of loop_in on the follower: the leader observes exactly
+    // one rising and one falling edge, nothing else.
+    pulse(kFollower, QStringLiteral("loop_in"));
+    EXPECT_EQ((QVector<double>{1.0, 0.0}), spyLoopIn.values)
+            << "the relayed loop_in trigger ping-ponged on the leader";
+
+    // A size-coded trigger button, same expectation.
+    pulse(kFollower, QStringLiteral("beatloop_4_activate"));
+    EXPECT_EQ((QVector<double>{1.0, 0.0}), spyBeatLoop.values)
+            << "the relayed beatloop trigger ping-ponged on the leader";
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+
+    // A control bridged in BOTH directions (relay + mirror): setting it from
+    // the follower must produce exactly one leader-side emission -- the
+    // mirror echo is quiesced and never relayed back.
+    Spy spyQuantize(ConfigKey(group(kLeader), QStringLiteral("quantize")));
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+    spyQuantize.clear();
+    setControl(kFollower, QStringLiteral("quantize"), 1.0);
+    ProcessBuffer();
+    EXPECT_EQ((QVector<double>{1.0}), spyQuantize.values)
+            << "the quantize echo re-entered the leader (bridge not quiescent)";
+    EXPECT_EQ(control(kLeader, QStringLiteral("quantize")),
+            control(kFollower, QStringLiteral("quantize")));
+
+    // The play command through its confirm path: one emission, and both
+    // members agree afterwards.
+    setControl(kFollower, QStringLiteral("play"), 0.0);
+    ProcessBuffer();
+    Spy spyPlay(ConfigKey(group(kLeader), QStringLiteral("play")));
+    setControl(kFollower, QStringLiteral("play"), 1.0);
+    ProcessBuffer();
+    EXPECT_EQ((QVector<double>{1.0}), spyPlay.values)
+            << "the relayed play must enter the leader exactly once";
+    EXPECT_EQ(control(kLeader, QStringLiteral("play")),
+            control(kFollower, QStringLiteral("play")));
+    assertPairLocked();
 }
 
 // ---------------------------------------------------------------------------

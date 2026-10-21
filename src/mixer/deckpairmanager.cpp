@@ -21,6 +21,7 @@
 #include "preferences/dialog/dlgprefdeck.h"
 #include "util/defs.h"
 #include "util/logger.h"
+#include "util/math.h"
 
 namespace {
 const mixxx::Logger kLoggerDeckPair("DeckPair");
@@ -56,14 +57,28 @@ bool isSyncAuthorityItem(const QString& item) {
 }
 
 /// Command keys relayed from the pair follower to the pair leader
-/// (DECK_PAIR_PLAN.md 5.5). Phase 2 scope: the transport command set needed
-/// to drive and verify the transport lock (tests T9 - T15, T21, T24, T39);
-/// the remaining cue/hotcue variants, scratch2/jog accumulator steering and
-/// key/pitch commands join with the full Phase 3 table. Slip keys must never
-/// appear in this table in either direction (R8; T30 asserts it).
-const QStringList& phase2RelayItems() {
+/// (DECK_PAIR_PLAN.md 5.5, the full Phase 3 table). Slip keys must never
+/// appear in this table in either direction (R8; T30 asserts it statically):
+/// a slip gesture stays on the deck that made it, and the bridge is fully
+/// disconnected while the follower slips (9.11 m).
+///
+/// Documented deviations from the plan's key list:
+///  - This tree calls the rate-range control `rateRange` (upstream
+///    `rate_range`), names the cue hold-and-play control `cue_play`
+///    (`cue_cue_play` does not exist here), and suffixes the loop-move
+///    family by size (`loop_move_1_forward`, not `_1_beat_forward`).
+///  - The shared-Track beatgrid family (`bpm`, `beats_adjust_*`,
+///    `beats_translate_*`) is *not* relayed although 5.5 listed it: these
+///    controls mutate the single Track both members share, and the acting
+///    deck's own BpmControl already applies the edit exactly once -- both
+///    engines then adopt the new grid through the Track's beats-changed
+///    signal. A relay would apply the same edit a second time on the
+///    leader. The *tempo* result of a follower BPM edit still moves the
+///    pair through the `rate_ratio` relay (the universal rate net, 9.11 d).
+const QStringList& fullRelayItems() {
     static const QStringList items = []() {
         QStringList relay = {
+                // Transport and play state.
                 QStringLiteral("play"),
                 QStringLiteral("start_play"),
                 QStringLiteral("start_stop"),
@@ -73,26 +88,89 @@ const QStringList& phase2RelayItems() {
                 QStringLiteral("playposition"),
                 QStringLiteral("repeat"),
                 QStringLiteral("quantize"),
-                QStringLiteral("loop_enabled"),
+                // Cue family, press+release pairs included. The follower's
+                // preview machinery is gated while locked (cuecontrol.cpp),
+                // so the command reaches the leader through the bridge and
+                // the follower rides the pair plane (T18).
+                QStringLiteral("cue_default"),
+                QStringLiteral("cue_set"),
+                QStringLiteral("cue_clear"),
+                QStringLiteral("cue_goto"),
+                QStringLiteral("cue_gotoandplay"),
+                QStringLiteral("cue_gotoandstop"),
+                QStringLiteral("cue_cdj"),
+                QStringLiteral("cue_play"),
+                QStringLiteral("cue_preview"),
+                QStringLiteral("play_stutter"),
+                // Intro/outro point edits (points live on the shared Track).
+                QStringLiteral("intro_start_set"),
+                QStringLiteral("intro_start_clear"),
+                QStringLiteral("intro_end_set"),
+                QStringLiteral("intro_end_clear"),
+                QStringLiteral("outro_start_set"),
+                QStringLiteral("outro_start_clear"),
+                QStringLiteral("outro_end_set"),
+                QStringLiteral("outro_end_clear"),
+                // Loop commands. `loop_enabled` is deliberately NOT relayed
+                // although 5.5 listed it in both directions: it is first a
+                // status the leader's engine writes with setAndConfirm, and
+                // the follower's own replica does the same while it executes
+                // a relayed loop command. Such a status echo looks exactly
+                // like a user command to the relay -- on a *toggle*
+                // (`reloop_toggle`) it inverts the leader: the follower's
+                // exit arrives before the toggle and re-enables what the
+                // toggle has just exited. Loop enable/disable commands have
+                // dedicated trigger keys (all relayed); the region state
+                // flows back on the mirror.
+                QStringLiteral("loop_in"),
+                QStringLiteral("loop_out"),
                 QStringLiteral("loop_exit"),
                 QStringLiteral("loop_halve"),
                 QStringLiteral("loop_double"),
-                QStringLiteral("beatloop_size"),
+                QStringLiteral("reloop_toggle"),
+                QStringLiteral("reloop_andstop"),
+                QStringLiteral("loop_remove"),
+                QStringLiteral("loop_anchor"),
+                QStringLiteral("loop_scale"),
+                // `beatloop_size` / `beatjump_size` are deliberately NOT
+                // relayed although 5.5 listed them: the engine rewrites them
+                // as status whenever a size-coded or scaling command runs
+                // (loop_halve halves the size CO, beatjump_size_double
+                // doubles it), and such a replica echo relayed to the leader
+                // applies the size change a second time -- loop_halve from
+                // the follower halved 4 -> 1 instead of 4 -> 2 (T19). The
+                // size is shared state on the mirror instead; every size
+                // *command* (beatloop_<size>_activate/toggle,
+                // beatloop_size via..., beatjump_size_double/halve,
+                // loop_scale) is relayed and the leader's resulting size
+                // flows back.
                 QStringLiteral("beatloop_activate"),
                 QStringLiteral("beatjump_forward"),
                 QStringLiteral("beatjump_backward"),
-                QStringLiteral("beatjump_size"),
+                QStringLiteral("beatjump_size_double"),
+                QStringLiteral("beatjump_size_halve"),
+                // Scratch / nudge surface. `jog` is deliberately NOT listed:
+                // it is the one consumer-zeroed accumulator, and its value
+                // only means anything at the consumer's read-and-zero. The
+                // pair transport carries it on the accumulator lane instead,
+                // published by the follower's gated consume step and claimed
+                // by the leader's own jog consumption (5.4.1, 9.13); the
+                // consume-and-drop that publishes it runs through
+                // EngineBuffer's pair housekeeping (9.12 h).
+                // `wheel` (absolute-value rotary: writes set the value, only
+                // the engine's TTRotary decay moves it between writes) and
+                // `scratch2` (value owned by the scratch source) are plain
+                // value copies; `scratch_position` relays as a value too, not
+                // an accumulator (5.5).
+                QStringLiteral("wheel"),
+                QStringLiteral("scratch2"),
+                QStringLiteral("scratch2_enable"),
+                QStringLiteral("scratch_position"),
+                QStringLiteral("scratch_position_enable"),
+                // The complete rate-control surface (9.11 d): moving any
+                // rate control of either member moves the pair's rate.
                 QStringLiteral("rate"),
-                // rate_ratio is relayed as the universal safety net: every
-                // rate-moving gesture on the follower - the pitch slider
-                // directly, but e.g. also a user BPM adjust through
-                // BpmControl - ends in rate_ratio, and the follower's own
-                // RateControl recomputation is gated while locked (deviation
-                // note 9.11 d). Without this relay such a gesture would not
-                // move the pair, and R7 demands that it does.
                 QStringLiteral("rate_ratio"),
-                // Note: this tree calls the rate-range control "rateRange"
-                // (upstream main: "rate_range").
                 QStringLiteral("rateRange"),
                 QStringLiteral("rate_dir"),
                 QStringLiteral("rate_temp_up"),
@@ -106,13 +184,52 @@ const QStringList& phase2RelayItems() {
                 QStringLiteral("reverse"),
                 QStringLiteral("fwd"),
                 QStringLiteral("back"),
+                // Key / pitch.
+                QStringLiteral("keylock"),
+                QStringLiteral("pitch_adjust"),
+                QStringLiteral("keylockMode"),
+                QStringLiteral("keyunlockMode"),
+                // Tempo taps: relaying lets the leader's BpmControl run the
+                // tap for the pair; the resulting tempo also arrives
+                // through the rate_ratio net.
+                QStringLiteral("bpm_tap"),
+                QStringLiteral("tempo_tap"),
+                // Hotcue organisation over the shared Track (idempotent).
+                QStringLiteral("sort_hotcues"),
+                QStringLiteral("sort_hotcues_remove_offsets"),
         };
-        for (int hotcue = 0; hotcue < 8; ++hotcue) {
-            relay << QStringLiteral("hotcue_%1_activate").arg(hotcue)
-                  << QStringLiteral("hotcue_%1_setcue").arg(hotcue);
+        // Hotcue commands over the full slot range. (The Phase 2 subset
+        // looped 0..7 -- that produced a never-existing hotcue_0_* key and
+        // silently dropped hotcue_8 from the bridge; the exists() guard in
+        // buildBridge kept it harmless, but the range is 1-based.)
+        for (int hotcue = 1; hotcue <= kMaxNumberOfHotcues; ++hotcue) {
+            const QString prefix = QStringLiteral("hotcue_%1").arg(hotcue);
+            relay << prefix + QStringLiteral("_activate")
+                  << prefix + QStringLiteral("_activatecue")
+                  << prefix + QStringLiteral("_activateloop")
+                  << prefix + QStringLiteral("_activate_preview")
+                  << prefix + QStringLiteral("_set")
+                  << prefix + QStringLiteral("_setcue")
+                  << prefix + QStringLiteral("_setloop")
+                  << prefix + QStringLiteral("_goto")
+                  << prefix + QStringLiteral("_gotoandplay")
+                  << prefix + QStringLiteral("_gotoandstop")
+                  << prefix + QStringLiteral("_gotoandloop")
+                  << prefix + QStringLiteral("_cueloop")
+                  << prefix + QStringLiteral("_clear")
+                  << prefix + QStringLiteral("_swap")
+                  << prefix + QStringLiteral("_color");
         }
         for (const double size : LoopingControl::getBeatSizes()) {
-            relay << QStringLiteral("beatloop_%1_activate").arg(size);
+            relay << QStringLiteral("beatloop_%1_activate").arg(size)
+                  << QStringLiteral("beatloop_%1_toggle").arg(size)
+                  << QStringLiteral("beatjump_%1_forward").arg(size)
+                  << QStringLiteral("beatjump_%1_backward").arg(size)
+                  << QStringLiteral("loop_move_%1_forward").arg(size)
+                  << QStringLiteral("loop_move_%1_backward").arg(size);
+            // NOT: beatlooproll_<size>_activate, beatlooproll_r<size>_activate,
+            // beatloop_r<size>_activate/_toggle -- the roll family engages
+            // slip and is therefore deck-local (R8).
         }
         return relay;
     }();
@@ -144,14 +261,17 @@ class BridgeWriteGuard {
 };
 
 /// Status keys mirrored from the pair leader onto the pair follower
-/// (DECK_PAIR_PLAN.md 5.5). Phase 2 scope as above. Deliberately missing:
+/// (DECK_PAIR_PLAN.md 5.5, the full Phase 3 table). Deliberately missing:
 /// anything slip-related, mixer-strip or stem controls, sync/vinyl,
 /// `pair_enabled` itself, and the engine-internal values the follower
-/// recomputes coherently at the pair position (playposition is the one
-/// exception, see the deviation note in DECK_PAIR_PLAN.md 9.11: a locked
-/// follower stops writing its own playposition, so the leader's is
-/// mirrored to keep it alive for skins and controllers).
-const QStringList& phase2MirrorItems() {
+/// recomputes coherently at the pair position -- `key`, `pitch`,
+/// `beat_distance`, `local_bpm`, `beat_active`, time displays (5.4.6, so
+/// `pitch_adjust` and `keylock` are mirrored but the derived `pitch`/`key`
+/// displays are not; T22 pins that they agree anyway). `playposition` is
+/// the one exception: a locked follower stops writing its own playposition,
+/// so the leader's is mirrored to keep it alive for skins and controllers
+/// (deviation 9.11 a).
+const QStringList& fullMirrorItems() {
     static const QStringList items = []() {
         QStringList mirror = {
                 QStringLiteral("play"),
@@ -168,19 +288,40 @@ const QStringList& phase2MirrorItems() {
                 QStringLiteral("loop_start_position"),
                 QStringLiteral("loop_end_position"),
                 QStringLiteral("loop_enabled"),
+                QStringLiteral("loop_anchor"),
                 QStringLiteral("beatloop_size"),
+                // Size *state* flows L->F (the size keys are not relayed;
+                // see the note in fullRelayItems): a size selection or a
+                // doubling made on the leader lands on the follower, and
+                // vice versa via the leader's own engine.
+                QStringLiteral("beatjump_size"),
                 QStringLiteral("cue_point"),
                 QStringLiteral("quantize"),
                 QStringLiteral("repeat"),
                 QStringLiteral("rate"),
                 QStringLiteral("rate_ratio"),
                 QStringLiteral("reverse"),
+                QStringLiteral("keylock"),
+                QStringLiteral("pitch_adjust"),
+                // Intro/outro point state (points shared via Track; the COs
+                // are per-deck status). Positions before enabled, like the
+                // loop points.
+                QStringLiteral("intro_start_position"),
+                QStringLiteral("intro_start_enabled"),
+                QStringLiteral("intro_end_position"),
+                QStringLiteral("intro_end_enabled"),
+                QStringLiteral("outro_start_position"),
+                QStringLiteral("outro_start_enabled"),
+                QStringLiteral("outro_end_position"),
+                QStringLiteral("outro_end_enabled"),
         };
-        for (int hotcue = 0; hotcue < 8; ++hotcue) {
-            mirror << QStringLiteral("hotcue_%1_status").arg(hotcue)
-                   << QStringLiteral("hotcue_%1_position").arg(hotcue)
-                   << QStringLiteral("hotcue_%1_type").arg(hotcue)
-                   << QStringLiteral("hotcue_%1_color").arg(hotcue);
+        for (int hotcue = 1; hotcue <= kMaxNumberOfHotcues; ++hotcue) {
+            const QString prefix = QStringLiteral("hotcue_%1").arg(hotcue);
+            mirror << prefix + QStringLiteral("_status")
+                   << prefix + QStringLiteral("_position")
+                   << prefix + QStringLiteral("_endposition")
+                   << prefix + QStringLiteral("_type")
+                   << prefix + QStringLiteral("_color");
         }
         for (const double size : LoopingControl::getBeatSizes()) {
             mirror << QStringLiteral("beatloop_%1_enabled").arg(size);
@@ -201,9 +342,15 @@ bool isOwnerOnlyMirrorItem(const QString& item) {
     }
     if (item.startsWith(QLatin1String("hotcue_"))) {
         return item.endsWith(QLatin1String("_status")) ||
-                item.endsWith(QLatin1String("_type"));
+                item.endsWith(QLatin1String("_type")) ||
+                // Legacy alias of _status (cuecontrol.cpp).
+                item.endsWith(QLatin1String("_enabled"));
     }
     if (item.startsWith(QLatin1String("beatloop_"))) {
+        return item.endsWith(QLatin1String("_enabled"));
+    }
+    if (item.startsWith(QLatin1String("intro_")) ||
+            item.startsWith(QLatin1String("outro_"))) {
         return item.endsWith(QLatin1String("_enabled"));
     }
     return false;
@@ -392,6 +539,31 @@ int DeckPairManager::partnerDeckIndex(int deckIndex) {
 }
 
 // static
+QStringList DeckPairManager::bridgeRelayKeys() {
+    return fullRelayItems();
+}
+
+// static
+QStringList DeckPairManager::bridgeMirrorKeys() {
+    return fullMirrorItems();
+}
+
+double DeckPairManager::pairAccumulated(const QString& group) const {
+    // Test hook (DECK_PAIR_PLAN.md 9.13): the pending `jog` accumulation on
+    // the transport lane of the active pair containing \p group. Reads the
+    // lane without claiming it -- the claim belongs to the leader's consumer.
+    const Member* pMember = member(group);
+    if (pMember == nullptr) {
+        return 0.0;
+    }
+    const Pair* pPair = activePairForDeckIndex(pMember->deckIndex);
+    if (pPair == nullptr) {
+        return 0.0;
+    }
+    return pPair->transport.accumulated();
+}
+
+// static
 bool DeckPairManager::isAudible(const Member& member) {
     if (isPlaying(member.pPlay.get())) {
         return true;
@@ -546,6 +718,7 @@ void DeckPairManager::formPair(Member& leader, Member& follower) {
     pPair->transport.setRoles(PairRole::PairLeader, PairRole::PairFollower);
     leader.pEngineBuffer->setPairTransport(&pPair->transport, PairRole::PairLeader);
     follower.pEngineBuffer->setPairTransport(&pPair->transport, PairRole::PairFollower);
+    pPair->pFollowerBuffer = follower.pEngineBuffer;
     pPair->transport.setActive(true);
     pPair->active = true;
 
@@ -608,6 +781,7 @@ void DeckPairManager::disarmPair(Pair& pair) {
 
     pair.leaderDeckIndex = -1;
     pair.followerDeckIndex = -1;
+    pair.pFollowerBuffer = nullptr;
     pair.active = false;
 }
 
@@ -984,8 +1158,8 @@ void DeckPairManager::buildBridge(
             entries.push_back(std::move(entry));
         }
     };
-    addEntries(pair.relays, phase2RelayItems(), true);
-    addEntries(pair.mirrors, phase2MirrorItems(), false);
+    addEntries(pair.relays, fullRelayItems(), true);
+    addEntries(pair.mirrors, fullMirrorItems(), false);
 
     // Initial coherence: adopt the leader's current statuses once. The
     // relayed values would otherwise only converge on the next change.
@@ -1046,6 +1220,23 @@ void DeckPairManager::slotBridgeRelay(
     if (pPair->pFollowerSlipEnabled && pPair->pFollowerSlipEnabled->toBool()) {
         return;
     }
+    // Mid-roll loop adoption: slipQuitAndAdopt() clears the follower's
+    // slip_enabled synchronously, but the engine has not yet consumed the
+    // request; treat that window as slipping so the beatloop_activate (and
+    // any loop/slip writes) it produces stay on the follower alone
+    // (DECK_PAIR_PLAN.md R8 / T30).
+    if (pPair->pFollowerBuffer != nullptr &&
+            pPair->pFollowerBuffer->isSlipQuitAndAdoptPending()) {
+        return;
+    }
+    // `jog` is not bridged at all (see fullRelayItems): the accumulator's
+    // meaning is created by its consumer's read-and-zero, so it crosses on the
+    // pair transport's accumulator lane, read at the follower's gated consume
+    // step and claimed at the leader's own jog consumption. If a table ever
+    // lists it again the copy-relay below would double- or triple-feed nudges
+    // on real hardware (bench findings 9.12 i / 9.13) while every unit test
+    // that writes once per callback stays green; the T16 burst test exists for
+    // precisely that gap.
     // Quiescence by equality (plus the echo guard above): a bridged write
     // makes the target equal to its source, so a same-value echo is dropped.
     // This is what stops the trigger buttons -- which have ignoreNops ==

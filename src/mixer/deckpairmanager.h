@@ -55,6 +55,22 @@ class DeckPairManager : public QObject {
     /// 2+4, i.e. `deckIndex +/- 2`. Returns -1 for invalid indices.
     static int partnerDeckIndex(int deckIndex);
 
+    /// \name Bridge tables (test hooks)
+    /// The control keys the pair bridge relays (F -> L) and mirrors (L -> F).
+    /// Exposed for the "no slip keys" invariant test (DECK_PAIR_PLAN.md T30):
+    /// no slip-related key may ever appear in either direction, and slip is
+    /// steered only through the follower's own slip plane.
+    /// @{
+    static QStringList bridgeRelayKeys();
+    static QStringList bridgeMirrorKeys();
+    /// The pending `jog` accumulation of the active pair containing `group`
+    /// -- the transport's accumulator lane between the follower's gated
+    /// consume-and-zero and the leader's consumption step. 0.0 when the deck
+    /// is unpaired. Exposed for the lane transfer test
+    /// (DECK_PAIR_PLAN.md 9.13).
+    double pairAccumulated(const QString& group) const;
+    /// @}
+
     /// \name Pair state queries (main thread)
     /// @{
     bool isPaired(const QString& group) const;
@@ -111,15 +127,21 @@ class DeckPairManager : public QObject {
         // Static lifetime: the address is handed to the engine buffers, so it
         // must never change and the object is never destroyed.
         EnginePairTransport transport;
-        // The CO bridge (Phase 2 subset of DECK_PAIR_PLAN.md 5.5): transport
-        // commands relayed follower -> leader, statuses mirrored leader ->
-        // follower. Built on formation, destroyed on disband, main thread
-        // only. Slip disconnects the whole bridge in both directions: a
-        // slipping follower behaves exactly like a single deck, and its
-        // replica re-anchors from the leader when slip releases (R8, 9.11 m).
+        // The CO bridge (DECK_PAIR_PLAN.md 5.5): transport commands relayed
+        // follower -> leader, statuses mirrored leader -> follower. Built on
+        // formation, destroyed on disband, main thread only. Slip disconnects
+        // the whole bridge in both directions: a slipping follower behaves
+        // exactly like a single deck, and its replica re-anchors from the
+        // leader when slip releases (R8, 9.11 m). The relay also refuses
+        // commands during a mid-roll loop adoption (pFollowerBuffer, T30).
         std::vector<std::unique_ptr<BridgeEntry>> relays;
         std::vector<std::unique_ptr<BridgeEntry>> mirrors;
         std::unique_ptr<ControlProxy> pFollowerSlipEnabled;
+        /// The follower's engine buffer, consulted by the relay to decide
+        /// whether the follower is mid-adoption of a rolled loop
+        /// (slipQuitAndAdopt): such commands stay local (R8 / T30). Set for
+        /// the lifetime of an active pair, null otherwise.
+        EngineBuffer* pFollowerBuffer = nullptr;
     };
 
     Member* member(const QString& group) const;

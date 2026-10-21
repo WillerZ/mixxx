@@ -535,7 +535,7 @@ seek/play/rate gates.
 *Exit:* T9–T12, T14–T15, T21, T24, T39 green (frame-exact lock incl. long-run, reverse-rate,
 unpair continuity, load-race).
 
-**Phase 3 — Command bridge.**
+**Phase 3 — Command bridge.** *(complete — see deviation notes §9.12)*
 Full relay + mirror tables (§5.5), accumulator steering, `play` confirm-through, the static
 "no slip keys" invariant test.
 *Exit:* T16–T20, T22–T23, T30, T37 green (every command class from **both** decks; follower
@@ -806,6 +806,126 @@ Deviations found while implementing:
     plane seek-stomp, not a slack artefact. T13 and T25 (Phase 4) cover the same property
     further; note d's Phase-4 follow-up (re-synchronising the internal rate state before
     slip-engage takes over) is unchanged and still open.
+
+### 9.12 Phase 3 implementation notes (command bridge, landed; deviations from the plan)
+
+Implemented in the `DeckPairManager` CO bridge (full §5.5 tables + accumulator steering),
+`CueControl` (locked-follower preview gate), and `EngineBuffer` (adoption quiescence flag).
+Exit tests T16–T20, T22–T23, T30 (both parts), T37 green (`src/test/deckpair_test.cpp`,
+`DeckPairManagerTest.BridgeTables*`), plus T16b `JogAccumulatorCrossesThePairLaneExactlyOnce`
+and the reworked T16 measurement from bench rounds 2–3 (notes i / j). Written autonomously by the AI assistant as a
+continuation of §9.11; the human developer must bench-verify on real hardware.
+
+ a) **Status keys that the engine rewrites as a *side effect* of a relayed command must not
+    be relayed** (supersedes §5.5 listing `loop_enabled`, `beatloop_size`, `beatjump_size`
+    as F→L relays — they stay mirror-only): the follower's own engine reacts to the relayed
+    command (replica, intended) and rewrites the status key; that rewrite is
+    indistinguishable from a user command to the thread-based origin filter, so it would
+    relay back and apply twice. Two concrete failures found by the tests: `reloop_toggle`
+    exited then immediately *re-entered* the leader's loop (follower status 0 arriving
+    before the relayed toggle inverts a toggle), and `loop_halve` halved the pair loop by
+    4× (the follower's halve wrote `beatloop_size` 4→2, which the relayed `loop_halve` then
+    halved again). Commands stay fully relayed; sizes/enable states flow leader→follower.
+
+ b) **Mid-roll loop adoption needs its own quiescence window** (found by T30):
+    `slipQuitAndAdopt()` clears the follower's `slip_enabled` *synchronously inside* the
+    command handler that the follower's own engine runs before the bridge listener, so the
+    "slip disconnects the bridge" guard (9.11 m) sees the slip already gone and would relay
+    the adoption (`beatloop_activate` pressed while rolling) onto the leader. EngineBuffer
+    now keeps the adoption pending until its callback processes the slip release
+    (`isSlipQuitAndAdoptPending()`, also cleared on track load — a pending adoption against
+    an unloaded track must not linger); the relay treats that window as slipping. R8's
+    "mid-roll `beatloop_activate` is a local act with zero pair effect" is pinned by
+    `DeckPairEngineTest.SlipStaysOnTheDeckThatEngagedIt`.
+
+ c) **Preview machinery must not run on a locked follower** (found by T18): the follower's
+    own `hotcueActivatePreview` writes `play` inline on the writer thread, *ahead of* the
+    relayed button press, so the leader takes its already-playing branch (plain goto, no
+    preview/return state) and the return-on-release is lost; the same happens on release in
+    reverse. `CueControl` now skips preview handling while `isPairLockedFollower()` — the
+    command reaches the leader via the bridge and the follower rides the pair plane; its
+    preview status arrives on the mirror. (Cue-preview CO `cue_preview` gated likewise;
+    `play_stutter`/`cue_default` branches were examined and left ungated — they are
+    idempotent through the play mirror, T23 pins the observable behaviour.) Note this
+    tree's single-deck preview-release semantics: the deck stops *at the previewed cue
+    point* (the cached return position is the cue position, not the pre-preview position) —
+    the pair reproduces exactly that.
+
+ d) **Steered accumulator set is {`jog`} only, not {`jog`, `scratch2`}** (found by
+    T16; final shape by note i): the plan (fact §3.6) assumed `scratch2` is
+    consumed-and-zeroed by its owner; RateControl only *reads* it — the scratch source
+    (mapping/vinyl) owns the value contract, and nothing zeroes it. Copy-relay (leader
+    mirrors the follower's value) is therefore the correct semantic for `scratch2`;
+    steering it (add + zero) would integrate absolute velocity writes into a runaway
+    value. `wheel` keeps the plain value copy as well: it is a self-decaying
+    `ControlTTRotary` with an absolute-value contract, which add-steering would multiply
+    across successive notches; bench round 2 confirmed wheel and scratch feel identical
+    on both members. Only `jog` — whose single consumer reads-and-zeroes it — needs any
+    special transfer at all, and it turns out that transfer cannot live in the CO bridge
+    (notes i and j): it rides the pair transport's accumulator lane.
+
+ e) **The shared-Track beatgrid family (`bpm`, `beats_adjust_*`, `beats_translate_*`) is
+    not relayed** (§5.5 listed it): the edit mutates the one Track both members share and
+    the acting deck's BpmControl applies it once; both engines adopt the new grid via the
+    Track's beats-changed signal, so a relay would double-apply the translation. Tempo
+    *results* still move the pair through the `rate_ratio` net (9.11 d).
+
+ f) **Naming in this tree** (extends 9.11 f): `cue_play` (no `cue_cue_play`),
+    `loop_move_<size>_forward|backward` (no `_1_beat_` spelling); the Phase 2 hotcue loop
+    also had an off-by-one (`hotcue_0_*` does not exist, `hotcue_8` was silently dropped) —
+    fixed, the range is 1..`kMaxNumberOfHotcues`, both tables.
+
+ g) **`pitch`/`key` are not mirrored** (§5.4.6 over §5.5's "pitch" entry): the follower
+    recomputes them at the pair rate; T22 pins that leader and follower agree within a
+    cent. The `pitch` CO publishes **cents** in this tree (100 = one semitone).
+
+ h) **A locked follower still runs the skipped accumulator consumer** (bench round 1;
+    cited by the `EngineBuffer`/`RateControl` code): skipping `calculateSpeed()` also skips
+    `getJogFactor()`'s read-and-zero and low-pass decay. The consumer step is what *gives*
+    the accumulator a meaning, and on a pair it must still happen — the follower runs it
+    once per callback and its consumed value is what crosses to the leader (note j, which
+    supersedes the value-copy and drain-move transfers proposed here first).
+
+ i) **Bench findings #3/#4 (rounds 2+3, SC Live 4) — no CO-level transfer of `jog` can
+    work:** round 2 heard follower nudges at 2–3x strength (leader right, scratch right);
+    the fix tried there — a drain-additive move (`L += F; F = 0`) in the relay — cut it to
+    a uniform 2x in round 3, leader still right, scratch still right. The bench machine's
+    shared component library then supplied the missing fact: `JogWheelBasic` writes the
+    deck's `jog` control with **absolute per-message velocity** (the SC Live's wheel
+    reports absolute platter position; the mapping derives deltas and *sets* `jog`), while
+    skins and `+=` nudge writers **accumulate deltas** into the same control. A single
+    deck reconciles both contracts only because its consumer read-and-zeroes at a fixed
+    period: overwrite-vs-sum is decided *at the consumption point*, and no event-time
+    relay can know which contract wrote the value. The copy relay re-fed cumulative
+    `+=` deltas (2–3x); the drain-move summed absolute velocity messages — ~2 per
+    callback window at bench buffer sizes is exactly the uniform 2x that remained.
+     Resolution in note j; both failed transfers are pinned by the round-3 test pair
+     (`absolute writes must not sum`, `relative bursts must not duplicate`).
+
+ j) **`jog` crosses on the pair transport's accumulator lane, not the CO bridge**
+    (implementation of note i): the locked follower's per-callback consume step
+    (`EngineBuffer` → `RateControl::pairFollowerConsumeAccumulators()`, note h) now
+    *publishes* what its read-and-zero discarded onto a latest-wins slot in
+    `EnginePairTransport`; the pair leader's `RateControl::getJogFactor()` **claims** the
+    lane into its own consumption, exactly where a single deck would have consumed the
+    same value. Both contracts then behave single-deck-exactly for free: overwrite
+    happens on the follower's CO before its consume (latest velocity), accumulation
+    happens there too (`+=` bursts sum), and each value reaches the leader's rate
+    precisely once. One publish per follower callback makes the slot latest-wins (a
+    stalled leader — loading — cannot accumulate a stale lump). Latency: one callback,
+    which is the delay a post-consumption write has on a single deck anyway. `jog` is
+    removed from the relay table; the table-invariant test pins its absence from both
+    tables because every CO transfer of it failed the bench while passing write-once
+    tests. NaNs are dropped at publish (poisoned wheel positions) as `getJogFactor`
+    drops them; `reset()` silences the lane with the pair. Regression:
+    `DeckPairEngineTest.JogAccumulatorCrossesThePairLaneExactlyOnce` (negative control:
+    publishing a constant or a sum, or skipping the claim, fails it outright) and the
+    reworked T16, which now measures the *steady-state* rate effect per buffer (the old
+    window-sum thresholds were effect-zero tolerant — the very test weakness the bench
+    kept discovering).
+
+*Phase-4 carry-overs unchanged:* re-sync the follower's internal rate state before
+slip-engage takes over (9.11 d), and the 9.11 m bench item (two-fader rapid alternation).
 
 ## 10. Explicitly out of scope
 

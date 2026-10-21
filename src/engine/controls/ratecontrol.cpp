@@ -451,14 +451,29 @@ double RateControl::getWheelFactor() const {
     return m_pWheel->get();
 }
 
-double RateControl::getJogFactor() const {
-    // FIXME: Sensitivity should be configurable separately?
-    constexpr double jogSensitivity = 0.1; // Nudges during playback
+double RateControl::consumeJogAccumulator() {
     double jogValue = m_pJog->get();
-
     // Since m_pJog is an accumulator, reset it since we've used its value.
     if (jogValue != 0.) {
         m_pJog->set(0.);
+    }
+    return jogValue;
+}
+
+double RateControl::getJogFactor() {
+    // FIXME: Sensitivity should be configurable separately?
+    constexpr double jogSensitivity = 0.1; // Nudges during playback
+    double jogValue = consumeJogAccumulator();
+
+    // Deck pairs (DECK_PAIR_PLAN.md 9.13): the pair leader folds in what the
+    // follower's gated consumer read-and-zeroed during the previous callback.
+    // Claiming here, at the leader's own consumption point, is what gives the
+    // value its meaning: absolute-velocity writes and relative writes from the
+    // follower's controller are reconciled exactly as they would be on a
+    // single deck, and each delta can take effect exactly once.
+    EnginePairTransport* pNudgeLane = m_pPairNudge.load(std::memory_order_relaxed);
+    if (pNudgeLane != nullptr && m_bPairClaimsNudge.load(std::memory_order_relaxed)) {
+        jogValue += pNudgeLane->takeAccumulated();
     }
 
     double jogValueFiltered = m_pJogFilter->filter(jogValue);
@@ -591,6 +606,43 @@ double RateControl::calculateSpeed(double baserate,
         }
     }
     return rate;
+}
+
+void RateControl::pairFollowerConsumeAccumulators() {
+    // Deck pairs (DECK_PAIR_PLAN.md 5.4.1 / bench findings 9.12 h + i, 9.13):
+    // a locked follower skips calculateSpeed() and with it the consume-and-zero
+    // that `getJogFactor()` performs -- the step that gives a `jog` write its
+    // meaning. Run exactly that read-and-zero once per callback on the engine
+    // thread and hand the consumed value to the pair's accumulator lane, where
+    // the leader claims it at its own consumption point: the nudge stream then
+    // reaches the pair transport with the same period, the same value, and the
+    // same at-most-once delivery it would have had on this deck's own
+    // consumer. The follower's low-pass filter keeps advancing (not that its
+    // result is used while locked -- but an unpaired or promoted follower must
+    // not resume from a stale filter either). `scratch2` is deliberately NOT
+    // consumed: the engine does not zero it even on a single deck (the scratch
+    // source owns the value), so the follower must not either.
+    const double consumed = consumeJogAccumulator();
+    m_pJogFilter->filter(consumed);
+
+    EnginePairTransport* pNudgeLane = m_pPairNudge.load(std::memory_order_relaxed);
+    if (pNudgeLane != nullptr && !m_bPairClaimsNudge.load(std::memory_order_relaxed)) {
+        pNudgeLane->publishAccumulated(consumed);
+    }
+}
+
+void RateControl::setPairNudgeLane(EnginePairTransport* pTransport, PairRole role) {
+    // Deck pairs (DECK_PAIR_PLAN.md 5.4.1 / 9.13): attach the shared `jog`
+    // accumulator lane of the pair this deck has just joined or left. Only the
+    // leader claims from the lane; the follower only needs the pointer to
+    // publish into it. Runs on the main thread while the pair is disarmed or
+    // before it turns active, so an engine callback can never see a half
+    // attached lane: the buffer's pair role is published after this call.
+    const bool claims = role == PairRole::PairLeader;
+    const bool publishes = role == PairRole::PairFollower;
+    m_pPairNudge.store(claims || publishes ? pTransport : nullptr,
+            std::memory_order_relaxed);
+    m_bPairClaimsNudge.store(claims, std::memory_order_relaxed);
 }
 
 void RateControl::processTempRate(const std::size_t bufferSamples) {

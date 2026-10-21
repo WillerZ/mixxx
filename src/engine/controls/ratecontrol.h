@@ -1,9 +1,11 @@
 #pragma once
 
 #include <QObject>
+#include <atomic>
 
 #include "control/pollingcontrolproxy.h"
 #include "engine/controls/enginecontrol.h"
+#include "engine/deckpairtransport.h"
 #include "engine/sync/syncable.h"
 #include "preferences/usersettings.h"
 
@@ -52,6 +54,24 @@ public:
           bool* pReportScratching,
           bool* pReportReverse);
 
+  /// Deck pairs: run the jog accumulator's consume-and-zero (including its
+  /// low-pass decay) and hand the consumed value to the pair transport's
+  /// accumulator lane, which the pair leader drains at its own consumption
+  /// step. A locked follower skips calculateSpeed() and with it this
+  /// housekeeping; without it nothing ever re-baselines the follower's `jog`
+  /// control and the value-copy relays of the pair bridge would feed stale
+  /// state. Called by EngineBuffer on the engine thread once per callback
+  /// while the follower is locked (DECK_PAIR_PLAN.md 5.4.1 / 9.13).
+  void pairFollowerConsumeAccumulators();
+
+  /// Deck pairs: attach the shared transport lane for the `jog` accumulator.
+  /// The pair leader drains the lane inside its own jog consumption, the pair
+  /// follower only receives the pointer so the consume-and-zero above can
+  /// publish through it; an unpaired deck gets neither (nullptr, Unpaired).
+  /// Called by EngineBuffer when the pair role is handed over, i.e. on the
+  /// main thread while the pair is disarmed or before it becomes active.
+  void setPairNudgeLane(EnginePairTransport* pTransport, PairRole role);
+
   // Set rate change when temp rate button is pressed
   static void setTemporaryRateChangeCoarseAmount(double v);
   static double getTemporaryRateChangeCoarseAmount();
@@ -94,7 +114,10 @@ public slots:
 private:
   bool isPairLockedFollower();
   void processTempRate(const size_t bufferSamples);
-  double getJogFactor() const;
+  /// Read the `jog` accumulator and re-baseline it, the way a single deck's
+  /// consumer does. Returns the raw accumulated value.
+  double consumeJogAccumulator();
+  double getJogFactor();
   double getWheelFactor() const;
   SyncMode getSyncMode() const;
 
@@ -143,6 +166,14 @@ private:
 
   std::unique_ptr<ControlObject> m_pJog;
   std::unique_ptr<Rotary> m_pJogFilter;
+
+  /// Deck pairs: the shared `jog` accumulator lane. The leader claims from it
+  /// (`m_bPairClaimsNudge`), the follower publishes into it from
+  /// pairFollowerConsumeAccumulators(); both only while the pair is active.
+  /// Engine thread reads the pair, main thread writes it at pair formation and
+  /// teardown, hence the atomics.
+  std::atomic<EnginePairTransport*> m_pPairNudge{nullptr};
+  std::atomic<bool> m_bPairClaimsNudge{false};
 
   ControlObject* m_pVCEnabled;
   ControlObject* m_pVCScratching;

@@ -97,11 +97,31 @@ void EnginePairTransport::reset() {
     m_cell.playing.store(false, std::memory_order_relaxed);
     m_cell.scratching.store(false, std::memory_order_relaxed);
     m_cell.reverse.store(false, std::memory_order_relaxed);
+    // A nudged-but-unconsumed window belongs to the pair being torn down; the
+    // next pair starts from a silent lane.
+    m_accumulator.store(0.0, std::memory_order_relaxed);
     m_seq.store(kInitialSeq, std::memory_order_release);
 }
 
 bool EnginePairTransport::hasSnapshot() const {
     return m_seq.load(std::memory_order_acquire) != kInitialSeq;
+}
+
+void EnginePairTransport::publishAccumulated(double value) {
+    if (std::isnan(value)) {
+        return;
+    }
+    // Latest-wins: the follower's gated consumer publishes once per callback,
+    // exactly the value its unrepressed self would have consumed.
+    m_accumulator.store(value, std::memory_order_relaxed);
+}
+
+double EnginePairTransport::takeAccumulated() {
+    return m_accumulator.exchange(0.0, std::memory_order_relaxed);
+}
+
+double EnginePairTransport::accumulated() const {
+    return m_accumulator.load(std::memory_order_relaxed);
 }
 
 // End of autonomously AI-generated content; see the disclaimer at the top of

@@ -611,6 +611,12 @@ void EngineBuffer::slotTrackLoaded(TrackPointer pTrack,
     m_slipPos = mixxx::audio::kStartFramePos;
     m_dSlipRate = 0;
     m_slipModeState = SlipModeState::Disabled;
+    // The slip reset above resolves any pending quit-and-adopt against the
+    // track that was just unloaded, and the next callback will not run the
+    // slip edge (button and processing state are both off now). Drop the
+    // request so it cannot linger: the deck pair bridge consults it to keep
+    // an adoption from crossing over (DECK_PAIR_PLAN.md R8 / T30).
+    m_slipQuitAndAdopt.storeRelease(0);
 
     m_pReplayGain->set(pTrack->getReplayGain().getRatio());
 
@@ -946,9 +952,14 @@ void EngineBuffer::setPairTransport(
         // role combined with a dangling transport pointer.
         m_pairRole.storeRelease(static_cast<quint8>(role));
         m_pPairTransport.storeRelease(pPairTransport);
+        // The `jog` lane is inert by now: the follower stopped publishing with
+        // the role, and the leader can only ever claim a zeroed lane (the
+        // transport resets it while disarmed).
+        m_pRateControl->setPairNudgeLane(pPairTransport, role);
     } else {
         // Arm: publish the pointer before the role enables its use.
         m_pPairTransport.storeRelease(pPairTransport);
+        m_pRateControl->setPairNudgeLane(pPairTransport, role);
         m_pairRole.storeRelease(static_cast<quint8>(role));
     }
 }
@@ -1038,6 +1049,15 @@ void EngineBuffer::processTrackLocked(
             pPairTransport != nullptr && pPairTransport->isActive();
     const bool bPairLockedFollower = bPairFollower && !m_bSlipEnabledProcessing &&
             !m_pSlipButton->toBool();
+    if (bPairLockedFollower) {
+        // The follower's transport inputs are neutralized by skipping
+        // RateControl::calculateSpeed() below; run the accumulator
+        // housekeeping (jog read-and-zero plus filter decay) that the skipped
+        // consumer performs and publish what it consumed onto the pair
+        // transport's accumulator lane, from where the leader claims it at
+        // its own consumption point (5.4.1, bench findings 9.12 h + i / 9.13).
+        m_pRateControl->pairFollowerConsumeAccumulators();
+    }
     PairTransportSnapshot pairSnapshot;
     const bool bPairConsumed = bPairLockedFollower &&
             pPairTransport->consume(&pairSnapshot);

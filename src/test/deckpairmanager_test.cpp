@@ -457,5 +457,114 @@ TEST_F(DeckPairManagerTest, PairFormationWithEmptyLeaderKeepsTrack) {
     EXPECT_TRUE(m_pPairManager->isPaired(group(0)));
 }
 
+// T30: the no-slip-keys invariant (DECK_PAIR_PLAN.md 5.5 / R8). The bridge is
+// a pure two-table lookup and neither table may contain any slip-related key
+// in either direction: slip and its snap-back are strictly deck-specific.
+// This static check is the guard that keeps the engine-level slip behaviour
+// honest: if anyone ever relays or mirrors a slip key, this fails before the
+// audio does.
+TEST_F(DeckPairManagerTest, BridgeTablesNeverContainSlipKeys) {
+    const QStringList relay = DeckPairManager::bridgeRelayKeys();
+    const QStringList mirror = DeckPairManager::bridgeMirrorKeys();
+
+    // Sanity: the tables are populated.
+    EXPECT_FALSE(relay.isEmpty());
+    EXPECT_FALSE(mirror.isEmpty());
+
+    // A key is slip-related if it is slip state or a slip gesture: slip state
+    // itself, any roll / reverse-roll variant (beatlooproll_<size>_activate,
+    // beatlooproll_r<size>_activate, beatloop_r<size>_toggle, reverseroll) --
+    // everything whose semantics are "own transport until released".
+    const auto isSlipKey = [](const QString& key) {
+        return key == QLatin1String("slip_enabled") ||
+                key == QLatin1String("reverseroll") ||
+                key.startsWith(QLatin1String("slip_")) ||
+                key.startsWith(QLatin1String("beatlooproll")) ||
+                key.startsWith(QLatin1String("beatloop_r"));
+    };
+
+    for (const QString& key : relay) {
+        EXPECT_FALSE(isSlipKey(key))
+                << "relay table (F->L) must never carry a slip key: "
+                << key.toUtf8().constData();
+    }
+    for (const QString& key : mirror) {
+        EXPECT_FALSE(isSlipKey(key))
+                << "mirror table (L->F) must never carry a slip key: "
+                << key.toUtf8().constData();
+    }
+
+    // `jog` is the consumer-zeroed accumulator: it crosses on the pair
+    // transport's accumulator lane, never on the CO bridge -- a copy relay
+    // feeds the leader's already-applied deltas back (bench 9.12 i) and a
+    // drain-move sums absolute-velocity writes (bench 9.13); both pass every
+    // write-once-per-callback test and fail on hardware. Pin its absence from
+    // both tables so the lane stays the only path.
+    EXPECT_FALSE(relay.contains(QLatin1String("jog")))
+            << "`jog` must not be bridged; it rides the accumulator lane "
+               "(DECK_PAIR_PLAN.md 9.13)";
+    EXPECT_FALSE(mirror.contains(QLatin1String("jog")))
+            << "`jog` is not leader state; it rides the accumulator lane "
+               "(DECK_PAIR_PLAN.md 9.13)";
+}
+
+// T30 companion: the other "never bridged" families of DECK_PAIR_PLAN.md
+// 5.5 -- the mixer strip and stem properties (R9), the transport-authority
+// and lifecycle controls that are refused or coordinated elsewhere (5.1,
+// 5.7, 5.8). The bridge may only ever talk about the shared *deck*.
+TEST_F(DeckPairManagerTest, BridgeTablesExcludeEverythingThatIsNotTheDeck) {
+    const QStringList tables = DeckPairManager::bridgeRelayKeys() +
+            DeckPairManager::bridgeMirrorKeys();
+    ASSERT_FALSE(tables.isEmpty());
+
+    const auto forbidden = [](const QString& key) -> bool {
+        // Mixer strip (R9): never shared within a pair.
+        static const QStringList stripPrefixes = {
+                QStringLiteral("volume"),
+                QStringLiteral("pregain"),
+                QStringLiteral("orientation"),
+                QStringLiteral("kill"),
+                QStringLiteral("filter"),
+                QStringLiteral("eq_"),
+                QStringLiteral("beatsync"),
+                QStringLiteral("talkover"),
+                QStringLiteral("main_mix"),
+                QStringLiteral("mute"),
+                QStringLiteral("pfl"),
+                QStringLiteral("vu_meter"),
+        };
+        for (const QString& prefix : stripPrefixes) {
+            if (key.startsWith(prefix)) {
+                return true;
+            }
+        }
+        // Stem properties live in [ChannelN_StemM] groups and are per deck
+        // (R9); `stems_enabled` on the deck group must not be bridged either.
+        if (key.startsWith(QLatin1String("stem"))) {
+            return true;
+        }
+        // Transport authorities and lifecycle controls: refused on the
+        // follower (5.8) or arbitrated by the manager itself (5.1, 5.7).
+        static const QStringList refused = {
+                QStringLiteral("sync_enabled"),
+                QStringLiteral("sync_mode"),
+                QStringLiteral("sync_leader"),
+                QStringLiteral("sync_key"),
+                QStringLiteral("vinylcontrol_enabled"),
+                QStringLiteral("vinylcontrol_wantenabled"),
+                QStringLiteral("eject"),
+                QStringLiteral("passthrough"),
+                QStringLiteral("pair_enabled"),
+        };
+        return refused.contains(key);
+    };
+
+    for (const QString& key : tables) {
+        EXPECT_FALSE(forbidden(key))
+                << "must never be bridged in either direction: "
+                << key.toUtf8().constData();
+    }
+}
+
 // End of autonomously AI-generated content; see the disclaimer at the top of
 // this file.

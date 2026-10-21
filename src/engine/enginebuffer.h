@@ -254,6 +254,16 @@ class EngineBuffer : public EngineObject {
 
     void slipQuitAndAdopt();
 
+    /// True between a `slipQuitAndAdopt()` request (a rolled loop adopted
+    /// while slipping) and the engine callback that processes the resulting
+    /// slip release. The deck pair bridge treats commands arriving in this
+    /// window as echoes of the local adoption act and refuses to relay them
+    /// (DECK_PAIR_PLAN.md R8 / T30: mid-roll `beatloop_activate` has zero
+    /// pair effect).
+    bool isSlipQuitAndAdoptPending() const {
+        return m_slipQuitAndAdopt.loadAcquire() != 0;
+    }
+
     /// \name Deck pair transport handoff
     ///
     /// `DeckPairManager` (main thread) hands the shared transport object of a

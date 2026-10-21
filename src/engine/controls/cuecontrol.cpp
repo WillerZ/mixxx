@@ -1176,7 +1176,26 @@ void CueControl::hotcueActivate(HotcueControl* pControl, double value, HotcueSet
     setHotcueFocusIndex(pControl->getHotcueIndex());
 }
 
+// Deck pairs: consults the transport authority state without touching any
+// CueControl state; see the gate in hotcueActivatePreview / cuePreview.
+bool CueControl::isPairLockedFollower() const {
+    EngineBuffer* pBuffer = const_cast<CueControl*>(this)->getEngineBuffer();
+    return pBuffer != nullptr && pBuffer->isPairLockedFollower();
+}
+
 void CueControl::hotcueActivatePreview(HotcueControl* pControl, double value) {
+    // Deck pairs: a locked pair follower replays the leader's transport, and
+    // a preview is a transport operation -- it runs on the leader alone,
+    // driven by the relayed `hotcue_N_activate` (DECK_PAIR_PLAN.md 5.5).
+    // Handling it here as well would drive `play` on the writer thread
+    // *before* the relayed command lands on the leader: the leader then sees
+    // a deck that "already plays" and branches differently (goto instead of
+    // preview, no return state), and on release the mirrored cancel races the
+    // relayed button release. The follower keeps no preview state of its
+    // own; its status arrives on the mirror (T18).
+    if (isPairLockedFollower()) {
+        return;
+    }
     CuePointer pCue = pControl->getCue();
     int index = pControl->getHotcueIndex();
     if (value > 0) {
@@ -1432,6 +1451,12 @@ void CueControl::cueGotoAndStop(double value) {
 }
 
 void CueControl::cuePreview(double value) {
+    // Deck pairs: same gate as hotcueActivatePreview -- the preview command
+    // is relayed to the pair leader, which owns the transport; a locked
+    // follower would only leak premature `play` writes into the bridge.
+    if (isPairLockedFollower()) {
+        return;
+    }
     const auto mainCuePosition =
             mixxx::audio::FramePos::fromEngineSamplePosMaybeInvalid(
                     m_pCuePoint->get());
