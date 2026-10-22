@@ -622,6 +622,9 @@ same-callback frame-exact position equality + play/loop-state equality; and a de
 | T37 | unit | Bridge echo safety: relay a trigger CO ⇒ exactly one leader-side slot entry (ControlObject spy pattern from `controlobjecttest`) | no ping-pong with `ignoreNops=false` buttons |
 | T40 | unit | Roll-pad dance on the follower while the pair loops (SC Live mapping sequence) | roll engages on the first press, pair loop survives on both members (§9.13) |
 | T41 | unit | DJ's round-3 sequence: follower roll cycle, then a plain leader loop | replica adopts the leader's loop after the slip cycle (§9.13) |
+| T42 | unit | Roll-pad dance on the **leader** while the pair loops (mapping's size→roll→size order) | roll engages on the first press, pair loop alive on both members across the whole cycle (§9.14) |
+| T43 | integration | SC Live roll/slicer sequences on a **controller thread** against a live engine thread while the main thread pumps its event loop; proxy-level spies attribute every slip/loop write to the writing thread | no slip ever enabled on the deck that did not gesture (R8), no stuck slip, pair loop state converged at every cycle boundary (§9.15); replica loop region never mirrored while the leader slips (§9.16) |
+| T44 | unit | The DJ's round-6 repro: no pair loop, roll pad dance on the **leader**, sampled **mid-gesture** | leader rolls (slip engaged), follower's replica shows none of the roll: `loop_enabled` 0, roll size's `beatloop_*_enabled` 0, loop region unmoved, pair plane keeps advancing; clean convergence on release (§9.16) |
 | T38 | build | `ctest -R "DeckPair"`, incl. `-D STEM=ON` job | all green |
 | T39 | engine | **Load race**: relayed seek arrives while follower is mid-load (seek dropped per `enginebuffer.cpp:593`) | positions equal again on the first follower callback after load; no stale queued-seek artifacts |
 
@@ -955,6 +958,185 @@ pins the DJ's exact sequence (roll pads, then a plain leader loop).
 
 *Phase-4 carry-overs unchanged:* re-sync the follower's internal rate state before
 slip-engage takes over (9.11 d), and the 9.11 m bench item (two-fader rapid alternation).
+
+### 9.14 Bench round 4 (SC Live 4) — rolls on the pair leader, and the queued roll press
+
+Implemented in `LoopingControl` (pair-member roll gate, leader shared-loop
+re-establishment, synchronous `beatlooproll_activate` delivery) and
+`EngineBuffer` (`isPairLeaderActive()`). Written autonomously by the AI assistant as the
+follow-up to the round-4 bench; the human developer must re-verify on the rig.
+
+The DJ's round-4 report after the round-3 fix: intermittently *"pad pressed and nothing
+happens"*, and *"pad pressed and both decks of the pair are looped"* — most presses behave,
+so timing was suspected. It is timing, and the mechanism is the **leader-side twin** of
+§9.13, amplified by the roll button's delivery thread:
+
+- The mapping's roll-pad press writes `beatloop_size` and then `beatlooproll_activate`
+  (`Denon-SC-Live-4-scripts.js:2474-2490`). The size write runs inline on the writing
+  controller thread (change-request path, `Qt::DirectConnection`) and **resizes a running
+  loop in place, keeping it enabled**; `beatlooproll_activate` was one of the two loop
+  buttons left on the default (Auto → *queued to the main thread*) delivery, so on
+  hardware the press landed a main-loop latency after the resize.
+- Press on the pair **leader** while the pair loops: the pair transport's live loop becomes
+  the roll length, still enabled — any engine callback landing in the gap plays the wrapped
+  loop, publishes it as the pair plane, and the mirror re-points the replica's region:
+  **both decks audibly loop at the pad length** until the queued press lands ("both decks
+  in the pair are looped"). Whether a callback lands in the window is buffer timing, which
+  is why it is intermittent and invisible to the single-threaded test engine (9.11 h).
+- When the queued press finally ran, the leader still had the vanilla semantics: the §9.13
+  gate exempted the locked follower *only*, so the leader took the "exit the running loop"
+  first-press branch — **no roll, and the pair loop destroyed** ("nothing happens"). Even
+  with the roll engaged, the vanilla release would have ended the shared loop on both
+  decks (restore-without-enable).
+
+Fix (deck-pair semantics in the engine, no controller binding change — R8: the roll is
+deck-local, the loop stays the pair's):
+
+- The `slotBeatLoopRollActivate` gate now accepts **either member of an active pair**
+  (`EngineBuffer::isPairLeaderActive()`, new, next to `isPairLockedFollower()`): a leader
+  roll press rolls over the shared loop instead of consuming it. The roll is deck-local
+  through slip — while the leader slips, the pair plane is the leader's slip plane (§5.2),
+  so the follower plays uninterrupted.
+- On the last deck-local roll release the leader **re-enables the restored loop** when the
+  stored loop had been enabled (new `m_bPrevLoopWasEnabled` in `storeLoopInfo()`): the
+  vanilla restore leaves it disabled, which for the leader means the pair stops looping on
+  both decks the moment the pad is released. This is the leader-side counterpart of the
+  follower's slip-release mirror re-anchor (9.11 m / 9.13). The same re-establishment was
+  added to the size-coded family's last-roll release (`slotBeatLoopDeactivateRoll`) so the
+  rule holds for both roll CO families.
+- `beatlooproll_activate` is delivered via `Qt::DirectConnection` now, like every other
+  loop-family button in that constructor (the `BeatLoopingControl` roll buttons were always
+  direct): the mapping's size-write→roll-write transaction becomes atomic against the
+  engine callback, closing the both-looped window on hardware. This restores for the
+  generic roll CO the same behavior the size-coded buttons and the unpaired bench testing
+  already had; the mapping is untouched.
+
+Regression: `DeckPairEngineTest.LeaderRollLeavesThePairLoopRunningAndRollsOnFirstPress`
+(T42) pins the mapping's full dance on the leader — press (size, roll), hold with the pair
+plane advancing under the leader's slip, release, size restore — asserting slip on the
+first press, the pair loop alive on both members throughout, and the pair region restored
+and mirrored. Negative controls on both halves: with the gate off the press takes the
+loop-exit branch (slip assertion fails); with the re-enable off, `loop_enabled` drops to 0
+on both members at release. T40/T41 (follower side) unchanged and green; the leader's roll
+interleaving with the bridge needed no manager changes (the roll family is in neither
+bridge table, and the loop_enabled 1→0→1 blip at the leader's release rides the normal
+mirror edge path).
+
+*Bench item:* the DirectConnection delivery is unobservable in the test environment
+(single-threaded engine, 9.11 h) — the round-4 re-test must include roll pads on **both**
+members while the pair loops at short buffers: each press must produce the deck-local slip
+roll, the pair must keep playing, and the loop must resume on release. *Open:*
+`beatloop_activate` is still queued-delivered (upstream default); its mid-roll adoption
+path (9.12 b) was not retimed in this round — revisit if the DJ's pad dance combines roll
+holds with loop presses.
+
+### 9.15 Bench round 5 (SC Live 4) — the threading-model integration harness, and what it found
+
+Test infrastructure (`DeckPairThreadedTest`, DECK_PAIR_TEST T43); implementation code is
+**unchanged** this round after a hardening experiment was implemented and then backed out
+(see below). Written autonomously by the AI assistant as the follow-up to the round-5
+bench; the human developer must re-verify on the rig.
+
+The DJ's round-5 report: follower-initiated rolls clean; leader-initiated rolls and
+slicer pads "affecting both decks, including enabling slip on the follower deck". No
+static path exists that could do this — every writer of a `slip_enabled` control is that
+deck's own `EngineBuffer` / `LoopingControl`, or the mapping writing its own group — and
+the single-threaded suites cannot see cross-thread interleavings at all (9.11 h). The
+round-5 ask was therefore to *build the missing instrument first*: an automated
+integration test with a realistic threading model.
+
+T43 runs the three production threads against the real engine: an **engine thread**
+calling `EngineMixer::process()` continuously (a callback can interleave any two writes
+of a mapping transaction), a **controller thread** replaying the SC Live roll/slicer CO
+sequences verbatim with microsecond jitter between writes (direct-connected loop slots
+execute inline on it, as on hardware), and the **main thread** pumping the Qt event loop
+throughout (queued mirror deliveries, the slip-release re-anchor, its trailing
+`QTimer::singleShot(0)` pass). The scenario runs both members' roll and slicer pads —
+sequentially and **overlapping mid-hold** (two fingers), including the pad-switch
+sequence and follower-side loop exit/re-entry through the relay — and asserts: R8 (no
+deck's `slip_enabled` may rise outside its own gesture, with the *writing thread*
+attributed in the violation log), no stuck slip, and loop-state convergence at each
+cycle boundary. Four findings:
+
+1. **Observation must happen at the ControlProxy layer.** `ControlObject::valueChanged`
+   is suppressed when the registered control instance itself is the writer
+   (`privateValueChanged` drops `pSender == this`), and the engine-internal writers
+   (roll engage/release via member pointers, pending activation) write exactly that way.
+   A first spy generation attached at the CO signal and was blind for precisely the
+   transitions under investigation; `DeckPairManager` listens through proxies (which see
+   every change whatever the sender), so T43 spies do too. Any future pair instrumentation
+   must follow the same rule.
+2. **The harness caught its own instance of the bench's error class.** The first versions
+   reported reproducible "loop_enabled diverged" failures — they were produced by the
+   harness itself: its main thread stopped pumping events while `join()`-ing the
+   controller thread, freezing the main loop's half of the system (mirror deliveries,
+   re-anchor, timers all stop) for the rest of the scenario. A GUI thread never blocks on
+   its input thread; the main thread now pumps until the scenario retires, and the
+   phantom failures disappeared. This is the same "half the system stood still" class the
+   round-4 queued-press bug created inside the engine — worth remembering in both
+   directions.
+3. **The detector is proven, and the reported leak is not present in this tree.**
+   Injecting a synthetic R8 leak (leader's roll press also setting the partner deck's
+   `slip_enabled`) is caught at the first press of cycle 0, with the writing thread named
+   in the violation. With the injection removed, repeated full soaks show no follower
+   slip from leader gestures, no loop divergence, and exact final convergence — for
+   roll, slicer, pad-switch, overlap and relay paths alike. Combined with the static
+   writer audit (no code path writes a `slip_enabled` across decks), the round-5 symptom
+   is not reproducible against the current tree. *Bench item:* rebuild the application
+   binary from this exact working tree (a round-4 build mixed with round-3 object files
+   would explain the symptom; the 10:47 `loopingcontrol.cpp` and 10:36 `enginebuffer.cpp`
+   changes must both be in the tested binary) and re-run the reported pad dance.
+4. **A convergence sweep was implemented, measured, and backed out.** A 20 ms
+   level-triggered re-anchor of every pair's replica (`refreshMirrorValues`, gated while
+   *either* member slips) briefly lived in `DeckPairManager`. Negative control: T43
+   passes identically without it — its motivating "stale queued emission equality-skipped
+   the delivery" pattern turned out to be finding 2 in disguise, and the edge-triggered
+   mirror plus slip-release re-anchor (9.11 l/m) proved watery under the faithful
+   threading model. The sweep is out; the engine side of this branch is exactly the
+   round-4 state. If a future bench round shows genuine replica drift, the sweep design
+   (interval timer on the manager, skip while either member slips, idempotent refresh)
+   is the shape that was validated as safe.
+
+### 9.16 Bench round 6 (SC Live 4) — rolls on the leader rolled *both* decks: the missing leader-side mirror halt
+
+The DJ rebuilt from this working tree and re-ran the pads with stems split across the pair
+(vocal audible on the leader, instrumental on the follower), which makes the pair's two
+planes audible at once. Result: **every** roll pad press on the leader rolled *both*
+decks — the instrumental followed the vocal into the roll region and back — while rolls on
+the follower stayed deck-local, and the round-5 "slip stuck on the follower" symptom was
+confirmed gone. Deterministic, leader-only, loop-shaped: the report itself named the bug.
+
+**Root cause:** the L→F mirror halt for slip (9.11 m) gated only on the *follower's*
+`slip_enabled`. While the leader rolls, its gesture statuses stream over the mirror like
+any other status: the roll's `loop_start/end_position` + `loop_enabled` (the follower
+engages the roll region as a real loop), the roll size's forced `beatloop_*_enabled`, and
+the per-callback `playposition` — which during a slip is the leader's *audible,
+wrap-inside-the-roll* position, re-seeking the follower into the roll region at main-loop
+rate. The transport lane itself was always correct (the pair plane rides the leader's slip
+plane, 5.2, loop-unaware while `isLoopRollActive()`); only the status mirror leaked the
+gesture. Rounds 3–5 could not see it: before the round-4 leader gate the roll often did
+not engage at all (vanilla loop-exit first-press), and every existing test — T40–T42
+included — samples loop state only at cycle boundaries, where the release re-anchor
+(9.11 m/9.13) had already healed the replica. Making the roll engage reliably made the
+leak reliable.
+
+**Fix (symmetry with 9.11 m):** `DeckPairManager::slotBridgeMirror` halts while the
+*leader* slips too, including its `slipQuitAndAdopt` pending window (T30 counterpart); a
+leader-side `slip_enabled` listener re-anchors the replica on release with the same guards
+and trailing pass as the follower's; `refreshMirrorValues()` itself now skips while **any**
+member slips, so the last release in the pair performs the anchor (this also closes the
+double-roll hole where a follower slip release pushed the rolling leader's statuses onto
+its own live roll). Cosmetic consequence, mirroring the accepted 9.11 m behavior: the
+follower's display-only mirrors (playposition, loop indicators) freeze for the duration of
+a leader roll; the audio plane never stops (it rides the transport lane). *Bench item:*
+the leader's waveform on the follower's screen during a leader roll. Pinned by T44
+(mid-gesture unit assertions, red before the fix) and the T43 follower-loop-region spy
+(mirror deliveries attributed to the main thread are violations while the leader slips).
+
+---
+
+> **AI disclaimer:** this §9.16 was written autonomously by the AI assistant from the
+> round-6 bench report and code analysis; the human developer must re-verify on the rig.
 
 ## 10. Explicitly out of scope
 

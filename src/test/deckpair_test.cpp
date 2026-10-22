@@ -18,7 +18,17 @@
 #include <gtest/gtest.h>
 
 #include <QString>
+#include <QThread>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+#include <random>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "control/controlobject.h"
 #include "engine/channels/enginedeck.h"
@@ -856,6 +866,165 @@ TEST_F(DeckPairEngineTest, LeaderLoopAfterFollowerRollCycleReachesReplica) {
             control(kFollower, QStringLiteral("loop_start_position")));
     EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
             control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+}
+
+// T42 (bench round 4, finding 9.14): the roll-pad dance on the pair LEADER
+// while the pair loops. The round-3 roll gate covered the locked follower
+// only, so on the leader the mapping's press sequence kept the vanilla
+// semantics: the `beatloop_size` write resized the live pair loop to the
+// roll length -- still enabled, so the pair plane (both decks) looped at the
+// pad length until the queued `beatlooproll_activate` delivery landed on the
+// main thread ("pressed a pad and both decks looped") -- and the press then
+// took the vanilla "exit the running loop" branch instead of rolling
+// ("pressed a pad and nothing happened"). A roll must be deck-local on the
+// leader too: the pair plane rides the leader's slip plane (5.2) and the
+// pair's loop is alive on both members again when the pad is released.
+TEST_F(DeckPairEngineTest, LeaderRollLeavesThePairLoopRunningAndRollsOnFirstPress) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+
+    // The same 4-beat pair loop as T40, created on the leader.
+    pulse(kLeader, QStringLiteral("beatloop_4_activate"));
+    ProcessBuffer();
+    ProcessBuffer();
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    const double pairLoopStart =
+            control(kLeader, QStringLiteral("loop_start_position"));
+    const double pairLoopEnd =
+            control(kLeader, QStringLiteral("loop_end_position"));
+
+    // The SC Live 4 roll-pad dance, this time on the leader: write the roll
+    // length (resizes the running loop in place), press the roll.
+    setControl(kLeader, QStringLiteral("beatloop_size"), 1.0);
+    setControl(kLeader, QStringLiteral("beatlooproll_activate"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+
+    // The roll engages on the first press -- it does not exit the pair loop
+    // (negative control: without the leader gate this press takes the
+    // vanilla loop-exit branch and slip_enabled stays 0).
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("slip_enabled")))
+            << "a roll-pad press on the pair leader must engage the "
+               "deck-local roll, not consume the pair loop (bench 9.14)";
+    // The pair loop survives the roll on both members (the leader's
+    // loop_enabled stays 1 throughout; the roll's own region is deck-local
+    // to the leader and never mirrored -- bench 9.16, see
+    // LeaderRollDoesNotRollTheFollower for the mid-gesture assertions; the
+    // size write of this dance legitimately resizes the pair loop before
+    // the roll engages, which the mapping's trailing size restore undoes).
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    // The roll stays deck-local: the follower never slips, it rides the pair
+    // plane -- the leader's slip plane while the leader rolls (5.2) -- and
+    // keeps advancing while the leader's audible plane wraps in the roll.
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    double followerBefore = playPos(kFollower);
+    ProcessBuffer();
+    EXPECT_GT(playPos(kFollower), followerBefore)
+            << "the pair plane keeps advancing while the leader rolls";
+
+    // Release: slip retires on the leader and the shared loop is
+    // re-established (negative control: without the leader-side re-enable,
+    // loop_enabled stays 0 on both decks -- the pair silently stopped
+    // looping when the pad was released). The mapping's handler restores the
+    // stored `beatloop_size` right after the roll release, which re-sizes
+    // the restored loop back to the pair's region (the store had captured
+    // it after the press's size write resized it).
+    setControl(kLeader, QStringLiteral("beatlooproll_activate"), 0.0);
+    setControl(kLeader, QStringLiteral("beatloop_size"), 4.0);
+    QTest::qWait(1);
+    for (int i = 0; i < 6; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")))
+            << "the pair's loop must survive the leader's roll cycle "
+               "(bench 9.14)";
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    EXPECT_DOUBLE_EQ(pairLoopStart,
+            control(kLeader, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(pairLoopEnd,
+            control(kLeader, QStringLiteral("loop_end_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+}
+
+// T44 (bench round 6, finding 9.16): the DJ's exact reproduction -- pair
+// formed, playing, NO pair loop, then any roll pad pressed on the leader.
+// The leader's roll is deck-local (R8): it rides the leader's slip plane on
+// the transport lane (5.2) while its audible plane wraps in the roll. The
+// round-4 leader gate made the roll engage on every press, which exposed a
+// reliable leak the earlier rounds could not isolate: the L->F mirror had a
+// slip halt for the follower (9.11 m) but none for the leader, so the
+// rolling leader's gesture status -- loop points + loop_enabled with the
+// roll region, the roll size's beatloop_*_enabled, and the per-callback
+// audible playposition -- streamed onto the follower: the follower engaged
+// the roll region as a real loop and was re-seeked into it at main-loop
+// rate. The DJ: "pressed any roll pad and the whole track rolled" -- both
+// decks, every press. The fix is the leader-side mirror halt; these
+// mid-gesture assertions are the ones rounds 3-5 never made (T40-T42 only
+// sample at cycle boundaries, where the release re-anchor had healed the
+// replica).
+TEST_F(DeckPairEngineTest, LeaderRollDoesNotRollTheFollower) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+    ASSERT_EQ(0.0, control(kFollower, QStringLiteral("loop_enabled")));
+    const double followerLoopStart =
+            control(kFollower, QStringLiteral("loop_start_position"));
+    const double followerLoopEnd =
+            control(kFollower, QStringLiteral("loop_end_position"));
+
+    // SC Live 4 roll pad press on the leader: size write, roll press.
+    setControl(kLeader, QStringLiteral("beatloop_size"), 1.0);
+    setControl(kLeader, QStringLiteral("beatlooproll_activate"), 1.0);
+    ProcessBuffer();
+    ProcessBuffer();
+
+    // The leader rolls (slip + roll loop engaged on ITS plane)...
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    // ...and the mirror is halted for the gesture: the follower's replica
+    // knows nothing about the roll (negative control: without the
+    // leader-side mirror halt the roll region, loop_enabled and the roll
+    // size's beatloop status all land on the follower here -- the audible
+    // "both decks loop" of the bench report).
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("loop_enabled")))
+            << "the leader's deck-local roll must not become a loop on the "
+               "follower (bench 9.16)";
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("beatloop_1_enabled")))
+            << "the roll size's enabled status is gesture status, not pair "
+               "state (bench 9.16)";
+    EXPECT_DOUBLE_EQ(followerLoopStart,
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(followerLoopEnd,
+            control(kFollower, QStringLiteral("loop_end_position")));
+    // The follower keeps playing the pair plane -- the leader's slip plane,
+    // advancing while the leader's audible plane wraps (5.2).
+    double followerBefore = playPos(kFollower);
+    ProcessBuffer();
+    EXPECT_GT(playPos(kFollower), followerBefore)
+            << "the pair plane keeps advancing while the leader rolls";
+
+    // Release: the leader returns to plain play, the follower never left it.
+    setControl(kLeader, QStringLiteral("beatlooproll_activate"), 0.0);
+    setControl(kLeader, QStringLiteral("beatloop_size"), 4.0);
+    QTest::qWait(1);
+    for (int i = 0; i < 8; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("beatloop_1_enabled")));
     assertPairLocked();
 }
 
@@ -1697,6 +1866,599 @@ TEST_F(DeckPairAudioTest, RepeatThroughEndOfTrackStaysLocked) {
     EXPECT_EQ(0.0, control(kLeader, kPlay));
     EXPECT_EQ(0.0, control(kFollower, kPlay));
     assertPairLocked();
+}
+
+// ---------------------------------------------------------------------------
+// Threaded integration tests (bench round 5, DECK_PAIR_PLAN.md 9.15).
+//
+// Everything above this line drives the engine on the main test thread, so
+// every connection behaves as same-thread: direct-connected loop slots run
+// inline, AutoConnection deliveries land synchronously, and no audio
+// callback can interleave a mapping transaction. That is exactly the blind
+// spot the bench keeps falling into (9.11 h): on real hardware the mapping
+// runs on the controller engine thread, the engine processes on the audio
+// thread, and the bridge/manager machinery runs on the GUI thread's event
+// loop. This fixture reproduces that three-thread model:
+//
+//   * engine thread     -- continuously calls EngineMixer::process(), the
+//                          audio callback; it can interleave any two CO
+//                          writes of a mapping transaction.
+//   * controller thread -- replays the SC Live 4 roll/slicer CO sequences
+//                          with per-write jitter, like MIDI messages being
+//                          handled one by one; direct-connected engine
+//                          slots execute inline here.
+//   * main thread       -- runs the Qt event loop throughout (queued
+//                          deliveries, bridge mirror, the slip-release
+//                          re-anchor and its trailing timer).
+//
+// Instrumentation: a direct-connected spy on both members' slip_enabled
+// records every write together with the *writing thread* (engine/controller/
+// main), and boundary probes check that the pair converges (replica matches,
+// no stuck slip) once gestures retire. Slip may only ever be written on the
+// deck that made the gesture (R8).
+// ---------------------------------------------------------------------------
+
+namespace {
+/// Which production thread a piece of code is running on inside the soak.
+/// thread_local, set once per thread; the slip spy reads it on the writer's
+/// thread because its connection is direct.
+enum SoakActor { kActorUnknown = 0,
+    kActorMain,
+    kActorEngine,
+    kActorController };
+thread_local int t_soakActor = kActorUnknown;
+
+const char* soakActorName(int actor) {
+    switch (actor) {
+    case kActorMain:
+        return "main";
+    case kActorEngine:
+        return "engine";
+    case kActorController:
+        return "controller";
+    default:
+        return "unknown";
+    }
+}
+
+/// RAII joiner so no soak thread can outlive the fixture.
+class JoinGuard {
+  public:
+    explicit JoinGuard(std::thread& thread)
+            : m_thread(thread) {
+    }
+    ~JoinGuard() {
+        join();
+    }
+    void join() {
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+    JoinGuard(const JoinGuard&) = delete;
+    JoinGuard& operator=(const JoinGuard&) = delete;
+
+  private:
+    std::thread& m_thread;
+};
+} // namespace
+
+class DeckPairThreadedTest : public DeckPairTestBase {
+  protected:
+    static constexpr int kLeader = 0;   // deck 1
+    static constexpr int kFollower = 2; // deck 3
+
+    struct SlipWrite {
+        int deck;
+        std::string key;
+        double from;
+        double to;
+        int actor;
+        int cycle;
+        std::string phase;
+    };
+
+    /// Formation on the main thread before any soak thread starts (the load
+    /// coordination is exercised by the single-threaded suites; here the pair
+    /// is simply a given, as it is for the DJ mid-set).
+    void startLockedPairIdle() {
+        t_soakActor = kActorMain;
+        registerDecks(4);
+        expectPaired(kLeader);
+        ASSERT_TRUE(waitForEngineTrack(kFollower, deck(kLeader)->getLoadedTrack()));
+        setPlaying(kLeader, true);
+        ProcessBuffer();
+        ASSERT_EQ(1.0, control(kFollower, kPlay));
+    }
+
+    std::mutex m_logMutex;
+    std::vector<SlipWrite> m_slipLog;
+    std::vector<std::string> m_violations;
+
+    void logViolation(const std::string& what) {
+        std::lock_guard<std::mutex> guard(m_logMutex);
+        m_violations.push_back(what);
+    }
+
+    void noteSlipWrite(SlipWrite write) {
+        std::lock_guard<std::mutex> guard(m_logMutex);
+        m_slipLog.push_back(std::move(write));
+    }
+
+    std::string slipLogDump() {
+        std::lock_guard<std::mutex> guard(m_logMutex);
+        std::string out;
+        for (const SlipWrite& w : m_slipLog) {
+            char line[256];
+            std::snprintf(line,
+                    sizeof(line),
+                    "  [deck %d] %s %g -> %g by %s "
+                    "(cycle %d, phase %s)\n",
+                    w.deck + 1,
+                    w.key.c_str(),
+                    w.from,
+                    w.to,
+                    soakActorName(w.actor),
+                    w.cycle,
+                    w.phase.c_str());
+            out += line;
+        }
+        return out;
+    }
+};
+
+// T43 (bench round 5): the SC Live roll pads and slicer pads, run from a
+// controller thread against a running engine thread while the main thread
+// pumps the event loop -- the production threading model. Invariants: slip
+// is never enabled on the follower by a leader-initiated gesture (R8), no
+// stuck slip, and the pair converges to a single loop state once gestures
+// retire (the replica mirrors the leader, or both are off).
+TEST_F(DeckPairThreadedTest, RollAndSlicerGesturesUnderProductionThreading) {
+    t_soakActor = kActorMain;
+    startLockedPairIdle();
+
+    // Gesture bookkeeping, written by the controller thread, read by the
+    // slip spy on whatever thread writes the CO.
+    std::atomic<int> cycleCounter{0};
+    std::atomic<bool> scenarioDone{false};
+    std::atomic<bool> expectLeaderSlip{false};
+    std::atomic<bool> expectFollowerSlip{false};
+    char phaseBuf[64];
+    std::atomic_flag phaseLock = ATOMIC_FLAG_INIT;
+    auto setPhase = [&](const char* phase) {
+        while (phaseLock.test_and_set()) {
+        }
+        std::strncpy(phaseBuf, phase, sizeof(phaseBuf) - 1);
+        phaseBuf[sizeof(phaseBuf) - 1] = '\0';
+        phaseLock.clear();
+    };
+    auto getPhase = [&]() {
+        while (phaseLock.test_and_set()) {
+        }
+        char copy[sizeof(phaseBuf)];
+        std::strncpy(copy, phaseBuf, sizeof(copy));
+        phaseLock.clear();
+        return std::string(copy);
+    };
+    setPhase("formation");
+
+    // Actor-tagged CO spies over the whole causal chain of the reported
+    // bug: slip_enabled, both roll activation keys, and loop_enabled on both
+    // members. Every write is logged with the writing thread, cycle, and
+    // phase. Two asserted rules: R8 -- slip_enabled may go 0 -> 1 only
+    // during its own deck's gesture -- and the leader-side mirror halt
+    // (bench 9.16): the follower's replica loop region may never move while
+    // the leader slips, because a mirror is always delivered on the main
+    // thread and the rolling leader's loop status is gesture, not pair
+    // state. The rest of the log identifies the culprit when a rule breaks.
+    //
+    // ControlProxy level, deliberately: ControlObject::valueChanged is
+    // suppressed when the registered control instance itself is the writer
+    // (ControlObject::privateValueChanged drops pSender == this), and
+    // engine-internal writers (roll engage/release via member pointers,
+    // pending loop activation) write exactly that way. A CO-level listener is
+    // blind for those transitions, which is not the bridge's view --
+    // DeckPairManager listens through proxies, which see every value change
+    // whatever the sender. The spy must see what the pair bridge sees.
+    QObject coSpy;
+    struct SpyKey {
+        int deck;
+        const char* key;
+        bool isSlip;
+        bool isFollowerLoopRegion;
+    };
+    const SpyKey spyKeys[] = {
+            {kLeader, "slip_enabled", true, false},
+            {kFollower, "slip_enabled", true, false},
+            {kLeader, "beatlooproll_activate", false, false},
+            {kFollower, "beatlooproll_activate", false, false},
+            {kLeader, "beatlooproll_1_activate", false, false},
+            {kFollower, "beatlooproll_1_activate", false, false},
+            {kLeader, "loop_enabled", false, false},
+            {kFollower, "loop_enabled", false, false},
+            {kFollower, "loop_start_position", false, true},
+            {kFollower, "loop_end_position", false, true},
+    };
+    std::array<double, sizeof(spyKeys) / sizeof(spyKeys[0])> previousValue;
+    previousValue.fill(0.0);
+    std::vector<std::unique_ptr<ControlProxy>> spyProxies;
+    for (size_t spyIndex = 0; spyIndex < sizeof(spyKeys) / sizeof(spyKeys[0]);
+            ++spyIndex) {
+        const SpyKey& spyKey = spyKeys[spyIndex];
+        auto pSpyProxy = std::make_unique<ControlProxy>(
+                group(spyKey.deck), spyKey.key);
+        pSpyProxy->connectValueChanged(
+                &coSpy,
+                [this,
+                        spyIndex,
+                        spyKey,
+                        &previousValue,
+                        &cycleCounter,
+                        &expectLeaderSlip,
+                        &expectFollowerSlip,
+                        getPhase](double value) {
+                    const int actor = t_soakActor;
+                    const std::string phase = getPhase();
+                    std::lock_guard<std::mutex> guard(m_logMutex);
+                    const double previous = previousValue[spyIndex];
+                    previousValue[spyIndex] = value;
+                    m_slipLog.push_back(SlipWrite{spyKey.deck,
+                            spyKey.key,
+                            previous,
+                            value,
+                            actor,
+                            cycleCounter.load(),
+                            phase});
+                    if (spyKey.isSlip && previous == 0.0 && value != 0.0) {
+                        const bool expected = spyKey.deck == kFollower
+                                ? expectFollowerSlip.load()
+                                : expectLeaderSlip.load();
+                        if (!expected) {
+                            char msg[256];
+                            std::snprintf(msg,
+                                    sizeof(msg),
+                                    "slip_enabled unexpectedly set on %s "
+                                    "deck (cycle %d, phase %s) by %s thread",
+                                    spyKey.deck == kFollower
+                                            ? "the FOLLOWER"
+                                            : "the leader",
+                                    cycleCounter.load(),
+                                    phase.c_str(),
+                                    soakActorName(actor));
+                            m_violations.push_back(msg);
+                        }
+                    }
+                    if (spyKey.isFollowerLoopRegion && previous != value &&
+                            actor == kActorMain) {
+                        // Mirror deliveries run on the main thread: a
+                        // follower replica move written there while the
+                        // leader slips is the 9.16 leak -- the mirror was
+                        // not halted for the rolling leader. (The leader's
+                        // slip check happens at the bridge, on the main
+                        // thread, at delivery time; reading it here from a
+                        // direct-connected spy observes the same moment.)
+                        const double leaderSlip = ControlObject::get(
+                                ConfigKey(group(kLeader),
+                                        QStringLiteral("slip_enabled")));
+                        if (leaderSlip != 0.0) {
+                            char msg[256];
+                            std::snprintf(msg,
+                                    sizeof(msg),
+                                    "follower loop region (%s) mirrored onto "
+                                    "the replica while the leader slips "
+                                    "(cycle %d, phase %s) -- 9.16 leak",
+                                    spyKey.key,
+                                    cycleCounter.load(),
+                                    phase.c_str());
+                            m_violations.push_back(msg);
+                        }
+                    }
+                },
+                Qt::DirectConnection);
+        spyProxies.push_back(std::move(pSpyProxy));
+    }
+
+    // --- engine thread: the audio callback, running the whole time ---------
+    std::atomic<bool> engineRunning{true};
+    std::thread engineThread([&]() {
+        t_soakActor = kActorEngine;
+        while (engineRunning.load(std::memory_order_relaxed)) {
+            m_pEngineMixer->process(kProcessBufferSize);
+            std::this_thread::sleep_for(std::chrono::microseconds(250));
+        }
+    });
+    JoinGuard engineJoiner(engineThread);
+
+    // --- controller thread: the mapping's own write sequences --------------
+    std::thread controllerThread([&]() {
+        t_soakActor = kActorController;
+        std::mt19937 rng(20261022);
+        auto jitter = [&](int minUs, int maxUs) {
+            std::uniform_int_distribution<int> dist(minUs, maxUs);
+            std::this_thread::sleep_for(
+                    std::chrono::microseconds(dist(rng)));
+        };
+        auto wr = [&](int deck, const char* key, double value) {
+            jitter(0, 60); // intra-handler gap between engine.setValue calls
+            ControlObject::set(ConfigKey(group(deck), QString(key)), value);
+        };
+        auto get = [&](int deck, const char* key) {
+            return ControlObject::get(ConfigKey(group(deck), QString(key)));
+        };
+        auto msgGap = [&]() {
+            jitter(200, 1500); // between MIDI messages
+        };
+        auto pulse = [&](int deck, const char* key) {
+            wr(deck, key, 1.0);
+            wr(deck, key, 0.0);
+        };
+        auto holdUs = [&](int us) {
+            std::uniform_int_distribution<int> dist(us / 2 > 0 ? us / 2 : 1,
+                    us);
+            std::this_thread::sleep_for(std::chrono::microseconds(dist(rng)));
+        };
+
+        // Half-gestures, split into press and release halves so the
+        // patterns below can overlap them exactly like two fingers do on
+        // real hardware (a pad stays held while the other side is played).
+        // The writes themselves are verbatim SC Live 4 mapping traffic.
+        auto rollPress = [&](int deck) -> double {
+            const double saved = get(deck, "beatloop_size");
+            wr(deck, "beatloop_size", 1.0);
+            wr(deck, "beatlooproll_activate", 1.0);
+            return saved;
+        };
+        auto rollSwap = [&](int deck) {
+            // pad switch while held: release, new size, press again
+            wr(deck, "beatlooproll_activate", 0.0);
+            jitter(0, 120);
+            wr(deck, "beatloop_size", 0.5);
+            wr(deck, "beatlooproll_activate", 1.0);
+        };
+        auto rollRelease = [&](int deck, double saved) {
+            wr(deck, "beatlooproll_activate", 0.0);
+            wr(deck, "beatloop_size", saved);
+        };
+        auto slicerPress = [&](int deck) -> double {
+            const double slipWasOn = get(deck, "slip_enabled");
+            wr(deck, "slip_enabled", 1.0);
+            wr(deck, "playposition", 0.10);
+            wr(deck, "beatlooproll_1_activate", 1.0);
+            return slipWasOn;
+        };
+        auto slicerRelease = [&](int deck, double slipWasOn) {
+            wr(deck, "beatlooproll_1_activate", 0.0);
+            wr(deck, "slip_enabled", slipWasOn != 0.0 ? 1.0 : 0.0);
+        };
+
+        for (int cycle = 0; cycle < 40; ++cycle) {
+            cycleCounter.store(cycle);
+
+            // The DJ's setup: a pair loop, then roll/slicer pads on both
+            // members, overlapping mid-hold.
+            if (get(kLeader, "loop_enabled") == 0.0) {
+                setPhase("loop on (leader)");
+                pulse(kLeader, "beatloop_4_activate");
+                msgGap();
+            }
+
+            switch (cycle % 8) {
+            case 0: // sequential, both members
+            case 1: {
+                setPhase("leader roll");
+                expectLeaderSlip = true;
+                double saved = rollPress(kLeader);
+                holdUs(5000);
+                rollRelease(kLeader, saved);
+                expectLeaderSlip = false;
+                msgGap();
+                setPhase("follower roll");
+                expectFollowerSlip = true;
+                saved = rollPress(kFollower);
+                holdUs(5000);
+                rollRelease(kFollower, saved);
+                expectFollowerSlip = false;
+                msgGap();
+                break;
+            }
+            case 2: { // overlap: follower presses while the leader rolls
+                setPhase("overlap leader roll + follower roll");
+                expectLeaderSlip = true;
+                const double leaderSaved = rollPress(kLeader);
+                holdUs(3000);
+                expectFollowerSlip = true;
+                const double followerSaved = rollPress(kFollower);
+                holdUs(3000);
+                rollRelease(kLeader, leaderSaved);
+                expectLeaderSlip = false;
+                holdUs(1500);
+                rollRelease(kFollower, followerSaved);
+                expectFollowerSlip = false;
+                msgGap();
+                break;
+            }
+            case 3: { // overlap, opposite release order
+                setPhase("overlap follower roll + leader roll");
+                expectFollowerSlip = true;
+                const double followerSaved = rollPress(kFollower);
+                holdUs(2000);
+                expectLeaderSlip = true;
+                const double leaderSaved = rollPress(kLeader);
+                holdUs(2000);
+                rollRelease(kFollower, followerSaved);
+                expectFollowerSlip = false;
+                holdUs(1000);
+                rollRelease(kLeader, leaderSaved);
+                expectLeaderSlip = false;
+                msgGap();
+                break;
+            }
+            case 4: { // leader slicer held, follower rolls under it
+                setPhase("overlap leader slicer + follower roll");
+                expectLeaderSlip = true;
+                const double slipWasOn = slicerPress(kLeader);
+                holdUs(2500);
+                expectFollowerSlip = true;
+                const double followerSaved = rollPress(kFollower);
+                holdUs(2500);
+                slicerRelease(kLeader, slipWasOn);
+                expectLeaderSlip = false;
+                holdUs(1500);
+                rollRelease(kFollower, followerSaved);
+                expectFollowerSlip = false;
+                msgGap();
+                break;
+            }
+            case 5: { // leader rolls, follower slices under it
+                setPhase("overlap leader roll + follower slicer");
+                expectLeaderSlip = true;
+                const double leaderSaved = rollPress(kLeader);
+                holdUs(2500);
+                expectFollowerSlip = true;
+                const double slipWasOn = slicerPress(kFollower);
+                holdUs(2500);
+                slicerRelease(kFollower, slipWasOn);
+                expectFollowerSlip = false;
+                holdUs(1500);
+                rollRelease(kLeader, leaderSaved);
+                expectLeaderSlip = false;
+                msgGap();
+                break;
+            }
+            case 6: { // leader rolls (with pad swap) while the follower
+                      // exits and re-enters the pair loop via the relay
+                setPhase("leader roll swap + follower loop exit");
+                expectLeaderSlip = true;
+                const double leaderSaved = rollPress(kLeader);
+                holdUs(2000);
+                rollSwap(kLeader);
+                holdUs(2000);
+                pulse(kFollower, "reloop_toggle");
+                holdUs(1500);
+                pulse(kFollower, "beatloop_4_activate");
+                holdUs(1500);
+                rollRelease(kLeader, leaderSaved);
+                expectLeaderSlip = false;
+                msgGap();
+                break;
+            }
+            case 7: { // both slicers at once
+                setPhase("overlap leader slicer + follower slicer");
+                expectLeaderSlip = true;
+                const double leaderSlip = slicerPress(kLeader);
+                holdUs(2000);
+                expectFollowerSlip = true;
+                const double followerSlip = slicerPress(kFollower);
+                holdUs(2000);
+                slicerRelease(kLeader, leaderSlip);
+                expectLeaderSlip = false;
+                holdUs(1000);
+                slicerRelease(kFollower, followerSlip);
+                expectFollowerSlip = false;
+                msgGap();
+                break;
+            }
+            }
+
+            if ((cycle % 6) == 4) {
+                // Follower-side loop exit rides the command relay.
+                setPhase("follower loop exit (relay)");
+                pulse(kFollower, "reloop_toggle");
+                msgGap();
+            }
+
+            setPhase("loop off (leader)");
+            pulse(kLeader, "reloop_toggle");
+            msgGap();
+
+            // Boundary probe: gestures all retired -- the pair must have
+            // converged. The window covers one tick of the manager's
+            // convergence sweep (9.15, 20 ms) plus event-loop slack; the
+            // point is convergence, not sub-tick atomicity.
+            std::this_thread::sleep_for(std::chrono::milliseconds(60));
+            if (get(kFollower, "slip_enabled") != 0.0) {
+                logViolation("follower slip still set at cycle boundary (" +
+                        std::to_string(cycle) + ")");
+            }
+            if (get(kLeader, "slip_enabled") != 0.0) {
+                logViolation("leader slip still set at cycle boundary (" +
+                        std::to_string(cycle) + ")");
+            }
+            if (get(kLeader, "slip_enabled") == 0.0 &&
+                    get(kFollower, "slip_enabled") == 0.0 &&
+                    get(kLeader, "loop_enabled") !=
+                            get(kFollower, "loop_enabled")) {
+                // Distinguish real divergence from a probe race: give the
+                // heal sweep one more interval and re-read.
+                const double l0 = get(kLeader, "loop_enabled");
+                const double f0 = get(kFollower, "loop_enabled");
+                std::this_thread::sleep_for(std::chrono::milliseconds(60));
+                const double l1 = get(kLeader, "loop_enabled");
+                const double f1 = get(kFollower, "loop_enabled");
+                char msg[256];
+                std::snprintf(msg,
+                        sizeof(msg),
+                        "loop_enabled diverged at boundary (cycle %d): "
+                        "L=%g F=%g; after +60ms: L=%g F=%g "
+                        "(manager=%p)",
+                        cycle,
+                        l0,
+                        f0,
+                        l1,
+                        f1,
+                        (void*)m_pPairManager.get());
+                logViolation(msg);
+            }
+        }
+        setPhase("done");
+        scenarioDone.store(true);
+    });
+    JoinGuard controllerJoiner(controllerThread);
+
+    // Main thread: the production GUI thread for the whole soak -- queued
+    // bridge deliveries, the slip-release re-anchor, the trailing pass, the
+    // convergence sweep. It must keep pumping events until the controller
+    // retires (a GUI thread never blocks on its input thread): joining
+    // first would freeze the main loop's half of the system and manufacture
+    // phantom non-convergence.
+    while (!scenarioDone.load()) {
+        QTest::qWait(25);
+    }
+    controllerJoiner.join();
+    engineRunning.store(false);
+    engineJoiner.join();
+    t_soakActor = kActorMain;
+
+    // Final convergence: slip is off everywhere, the pair loop is owned by
+    // the leader and mirrored, and the members are locked again.
+    setControl(kLeader, QStringLiteral("beatloop_4_activate"), 1.0);
+    setControl(kLeader, QStringLiteral("beatloop_4_activate"), 0.0);
+    QTest::qWait(120);
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("slip_enabled")));
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")))
+            << "the replica must still mirror the pair loop after the soak";
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    EXPECT_EQ(buffer(kLeader)->getPlayPos().value(),
+            buffer(kFollower)->getPlayPos().value())
+            << "the pair is frame-exact again once the soak is over";
+
+    std::string violations;
+    {
+        std::lock_guard<std::mutex> guard(m_logMutex);
+        for (const std::string& v : m_violations) {
+            violations += "\n  * ";
+            violations += v;
+        }
+    }
+    EXPECT_TRUE(violations.empty())
+            << "threading-model invariants violated:" << violations << "\n"
+            << "slip_enabled write log:\n"
+            << slipLogDump();
 }
 
 // End of autonomously AI-generated content; see the disclaimer at the top of

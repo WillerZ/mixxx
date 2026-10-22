@@ -132,16 +132,28 @@ class DeckPairManager : public QObject {
         // formation, destroyed on disband, main thread only. Slip disconnects
         // the whole bridge in both directions: a slipping follower behaves
         // exactly like a single deck, and its replica re-anchors from the
-        // leader when slip releases (R8, 9.11 m). The relay also refuses
-        // commands during a mid-roll loop adoption (pFollowerBuffer, T30).
+        // leader when slip releases (R8, 9.11 m). The mirror side halts for
+        // a slipping LEADER too: a rolling leader's loop status and
+        // playposition are its deck-local gesture, while the pair's truth
+        // rides the transport lane (5.2) -- mirroring them turned every
+        // leader roll pad press into an audible loop on the follower (bench
+        // round 6, 9.16). The relay also refuses commands during a mid-roll
+        // loop adoption (pFollowerBuffer, T30).
         std::vector<std::unique_ptr<BridgeEntry>> relays;
         std::vector<std::unique_ptr<BridgeEntry>> mirrors;
         std::unique_ptr<ControlProxy> pFollowerSlipEnabled;
+        /// Leader-side counterpart of pFollowerSlipEnabled: gates the
+        /// L->F mirror while the leader slips, and re-anchors the replica
+        /// on release (9.16).
+        std::unique_ptr<ControlProxy> pLeaderSlipEnabled;
         /// The follower's engine buffer, consulted by the relay to decide
         /// whether the follower is mid-adoption of a rolled loop
         /// (slipQuitAndAdopt): such commands stay local (R8 / T30). Set for
         /// the lifetime of an active pair, null otherwise.
         EngineBuffer* pFollowerBuffer = nullptr;
+        /// Leader-side counterpart of pFollowerBuffer: the mirror treats the
+        /// leader's mid-adoption window as slipping (9.16).
+        EngineBuffer* pLeaderBuffer = nullptr;
     };
 
     Member* member(const QString& group) const;
@@ -173,8 +185,13 @@ class DeckPairManager : public QObject {
     /// Builds / tears down the CO bridge of one pair (main thread).
     void buildBridge(Pair& pair, Member& leader, Member& follower);
     void clearBridge(Pair& pair);
+    /// True while either member of the pair has slip engaged. Neither
+    /// member's slip-gesture statuses may be bridged, and a mirror
+    /// re-anchor waits for the *last* slip release in the pair
+    /// (9.11 m, 9.16).
+    static bool pairMemberSlipping(const Pair& pair);
     /// Adopts the leader's current mirror statuses on the follower once
-    /// (bridge formation and follower slip release, 9.11 m).
+    /// (bridge formation and slip release on either member, 9.11 m, 9.16).
     void refreshMirrorValues(Pair& pair);
     /// Relays one follower command to the leader (F -> L, 5.5).
     void slotBridgeRelay(Pair* pPair, BridgeEntry* pEntry, double value);

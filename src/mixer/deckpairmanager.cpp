@@ -62,7 +62,8 @@ bool isSyncAuthorityItem(const QString& item) {
 /// (DECK_PAIR_PLAN.md 5.5, the full Phase 3 table). Slip keys must never
 /// appear in this table in either direction (R8; T30 asserts it statically):
 /// a slip gesture stays on the deck that made it, and the bridge is fully
-/// disconnected while the follower slips (9.11 m).
+/// disconnected while the follower slips (9.11 m) -- the mirror side is also
+/// halted while the *leader* slips (9.16).
 ///
 /// Documented deviations from the plan's key list:
 ///  - This tree calls the rate-range control `rateRange` (upstream
@@ -721,6 +722,7 @@ void DeckPairManager::formPair(Member& leader, Member& follower) {
     leader.pEngineBuffer->setPairTransport(&pPair->transport, PairRole::PairLeader);
     follower.pEngineBuffer->setPairTransport(&pPair->transport, PairRole::PairFollower);
     pPair->pFollowerBuffer = follower.pEngineBuffer;
+    pPair->pLeaderBuffer = leader.pEngineBuffer;
     pPair->transport.setActive(true);
     pPair->active = true;
 
@@ -784,6 +786,7 @@ void DeckPairManager::disarmPair(Pair& pair) {
     pair.leaderDeckIndex = -1;
     pair.followerDeckIndex = -1;
     pair.pFollowerBuffer = nullptr;
+    pair.pLeaderBuffer = nullptr;
     pair.active = false;
 }
 
@@ -1109,9 +1112,11 @@ void DeckPairManager::buildBridge(
                         // pressed the next roll or slice: re-anchoring a
                         // *slipping* follower is exactly the clobbering this
                         // listener exists to undo, so leave the replica to
-                        // the next release.
-                        if (pPair->pFollowerSlipEnabled &&
-                                pPair->pFollowerSlipEnabled->toBool()) {
+                        // the next release. The same holds while the LEADER
+                        // slips: its statuses are its own roll gesture, so
+                        // the anchor waits for the last slip in the pair
+                        // to release (9.16).
+                        if (pairMemberSlipping(*pPair)) {
                             return;
                         }
                         refreshMirrorValues(*pPair);
@@ -1131,8 +1136,45 @@ void DeckPairManager::buildBridge(
                             if (!pPair->active) {
                                 return;
                             }
-                            if (pPair->pFollowerSlipEnabled &&
-                                    pPair->pFollowerSlipEnabled->toBool()) {
+                            if (pairMemberSlipping(*pPair)) {
+                                return;
+                            }
+                            refreshMirrorValues(*pPair);
+                        });
+                    });
+        }
+    }
+    if (pair.pLeaderSlipEnabled == nullptr) {
+        const ConfigKey slipKey(
+                leader.group, QStringLiteral("slip_enabled"));
+        if (ControlObject::exists(slipKey)) {
+            pair.pLeaderSlipEnabled =
+                    std::make_unique<ControlProxy>(slipKey, this);
+            // Leader-side counterpart of the follower listener above
+            // (bench round 6, 9.16): the mirror was halted while the leader
+            // slipped, so its replica adopts the leader's converged loop
+            // status once the slip releases. Same delivery contract (auto
+            // connection, main loop), same guards: skip while any member is
+            // still slipping -- the last release in the pair performs the
+            // re-anchor -- and the trailing pass re-runs it after the
+            // release transaction (loop-disable, slip-release, loop-restore)
+            // has completed.
+            Pair* pPair = &pair;
+            pair.pLeaderSlipEnabled->connectValueChanged(
+                    this,
+                    [this, pPair](double value) {
+                        if (value != 0.0 || !pPair->active) {
+                            return;
+                        }
+                        if (pairMemberSlipping(*pPair)) {
+                            return;
+                        }
+                        refreshMirrorValues(*pPair);
+                        QTimer::singleShot(0, this, [this, pPair]() {
+                            if (!pPair->active) {
+                                return;
+                            }
+                            if (pairMemberSlipping(*pPair)) {
                                 return;
                             }
                             refreshMirrorValues(*pPair);
@@ -1193,7 +1235,20 @@ void DeckPairManager::buildBridge(
                             << pair.mirrors.size() << "mirrors";
 }
 
+// static
+bool DeckPairManager::pairMemberSlipping(const Pair& pair) {
+    return (pair.pFollowerSlipEnabled && pair.pFollowerSlipEnabled->toBool()) ||
+            (pair.pLeaderSlipEnabled && pair.pLeaderSlipEnabled->toBool());
+}
+
 void DeckPairManager::refreshMirrorValues(Pair& pair) {
+    // While any member slips, the leader's loop-family statuses and
+    // playposition are slip-gesture state, not the pair's truth: the anchor
+    // waits for the last release in the pair -- whichever slip listener
+    // fires last performs it (9.11 m, 9.16).
+    if (pairMemberSlipping(pair)) {
+        return;
+    }
     // All of these writes quiesce on their own: target-equal writes are
     // dropped by the bridge slots, and every other echo finds the value it
     // just received already set on its target (see slotBridgeRelay).
@@ -1215,6 +1270,7 @@ void DeckPairManager::clearBridge(Pair& pair) {
     pair.relays.clear();
     pair.mirrors.clear();
     pair.pFollowerSlipEnabled.reset();
+    pair.pLeaderSlipEnabled.reset();
 }
 
 void DeckPairManager::slotBridgeRelay(
@@ -1292,6 +1348,30 @@ void DeckPairManager::slotBridgeMirror(
     // immediately" (DECK_PAIR_PLAN.md 9.11 m). On slip release the replica
     // re-anchors through refreshMirrorValues(), so nothing stays stale.
     if (pPair->pFollowerSlipEnabled && pPair->pFollowerSlipEnabled->toBool()) {
+        return;
+    }
+    // The mirror is equally halted while the LEADER slips (bench round 6):
+    // a rolling leader's loop status and playposition describe its
+    // deck-local gesture, not the pair. Every buffer the leader's engine
+    // publishes the audible, wrap-inside-the-roll position, and every roll
+    // press rewrites the loop points/enabled with the roll's region --
+    // mirrored, the follower engaged the roll region as a real loop and was
+    // re-seeked into it at main-loop rate: "press a roll pad and the whole
+    // track rolls" on both members, now on every press (the round-4 leader
+    // gate made the roll engage reliably, which made this leak reliable).
+    // The pair's truth needs no mirror while the leader slips: it rides the
+    // transport lane, published from the leader's slip plane (5.2). On
+    // release the replica re-anchors through refreshMirrorValues(), so
+    // nothing stays stale (9.16; mirror of the 9.11 m rule above).
+    if (pPair->pLeaderSlipEnabled && pPair->pLeaderSlipEnabled->toBool()) {
+        return;
+    }
+    // Mid-roll loop adoption on the leader: same window logic as the relay
+    // side (R8 / T30) -- slip_enabled is already cleared, but the engine has
+    // not consumed the adoption yet, and the loop writes it produces are a
+    // local act with zero pair effect.
+    if (pPair->pLeaderBuffer != nullptr &&
+            pPair->pLeaderBuffer->isSlipQuitAndAdoptPending()) {
         return;
     }
     // Freshness: a queued mirror emission can arrive after the leader has

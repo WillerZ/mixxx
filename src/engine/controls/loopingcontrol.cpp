@@ -56,6 +56,7 @@ LoopingControl::LoopingControl(const QString& group,
           m_bAdjustingLoopInOld(false),
           m_bAdjustingLoopOutOld(false),
           m_bLoopOutPressedWhileLoopDisabled(false),
+          m_bPrevLoopWasEnabled(false),
           m_prevLoopSize(-1),
           m_trueTrackBeats(false) {
     m_currentPosition.setValue(mixxx::audio::kStartFramePos);
@@ -147,8 +148,23 @@ LoopingControl::LoopingControl(const QString& group,
     connect(m_pCOBeatLoopActivate, &ControlObject::valueChanged,
             this, &LoopingControl::slotBeatLoopToggle);
     m_pCOBeatLoopRollActivate = new ControlPushButton(ConfigKey(group, "beatlooproll_activate"));
-    connect(m_pCOBeatLoopRollActivate, &ControlObject::valueChanged,
-            this, &LoopingControl::slotBeatLoopRollActivate);
+    // DirectConnection, like every other loop-family button above: mappings
+    // that implement roll pads with the generic control write `beatloop_size`
+    // (request path, delivered inline on the writing thread -- it resizes a
+    // running loop in place) immediately followed by
+    // `beatlooproll_activate`. With the default (queued) delivery the pair
+    // leader kept playing in the resized, still-enabled loop until the main
+    // loop got around to the roll press: a deck-pair bench roll came out as
+    // the pair looping for a buffer or two, at the mercy of the audio
+    // callback (DECK_PAIR_PLAN.md 9.14, bench round 4). Delivery in the
+    // writer's thread makes the size-write/roll-write transaction atomic
+    // against the engine callback, exactly like the size-coded roll buttons
+    // below already are.
+    connect(m_pCOBeatLoopRollActivate,
+            &ControlObject::valueChanged,
+            this,
+            &LoopingControl::slotBeatLoopRollActivate,
+            Qt::DirectConnection);
 
     // Here we create corresponding beatloop_(SIZE) CO's which all call the same
     // BeatControl, but with a set value.
@@ -1382,7 +1398,19 @@ void LoopingControl::slotBeatLoopDeactivateRoll(BeatLoopingControl* pBeatLoopCon
         setLoopingEnabled(false);
         m_pSlipEnabled->set(0);
         m_bLoopRollActive = false;
+        // Pair leader: the last deck-local roll must leave the pair's loop
+        // running (DECK_PAIR_PLAN.md 9.14, see slotBeatLoopRollActivate).
+        EngineBuffer* pBuffer = getEngineBuffer();
+        const LoopInfo prevLoopInfo = m_prevLoopInfo.getValue();
+        const bool bReestablishPairLoop = pBuffer != nullptr &&
+                pBuffer->isPairLeaderActive() &&
+                m_bPrevLoopWasEnabled &&
+                prevLoopInfo.startPosition.isValid() &&
+                prevLoopInfo.endPosition.isValid();
         restoreLoopInfo();
+        if (bReestablishPairLoop) {
+            setLoopingEnabled(true);
+        }
     } else {
         // Return to the previous beatlooproll if necessary.
         // Else previous regular beatloop if no rolling loops are active.
@@ -1395,6 +1423,10 @@ void LoopingControl::storeLoopInfo() {
         return;
     }
 
+    // Remember whether the stored loop was live: an active pair leader
+    // re-enables it when its deck-local roll ends, so that the pair's loop
+    // survives the gesture (DECK_PAIR_PLAN.md 9.14).
+    m_bPrevLoopWasEnabled = m_bLoopingEnabled;
     LoopInfo loopInfo = m_loopInfo.getValue();
     if (loopInfo.startPosition.isValid() && loopInfo.endPosition.isValid()) {
         m_prevLoopInfo.setValue(loopInfo);
@@ -1417,6 +1449,7 @@ void LoopingControl::restoreLoopInfo() {
     if (prevLoopInfo.startPosition.isValid() && prevLoopInfo.endPosition.isValid()) {
         setLoop(prevLoopInfo.startPosition, prevLoopInfo.endPosition, false);
         m_prevLoopInfo.setValue(LoopInfo{});
+        m_bPrevLoopWasEnabled = false;
     } else {
         // This may happen when there was no loop set when we activated the
         // rolling loop that triggered storeLoopInfo(). Re-apply the loop size
@@ -1768,20 +1801,26 @@ void LoopingControl::slotBeatLoopToggle(double pressed) {
 }
 
 void LoopingControl::slotBeatLoopRollActivate(double pressed) {
-    // Deck pairs (DECK_PAIR_PLAN.md R8 / 9.13): on a locked pair follower the
-    // running loop is the pair's status mirrored from the leader. The
-    // vanilla first-press semantics ("exit the running loop, roll on the next
-    // press") would destroy that replica without any change on the leader --
-    // and the edge-triggered mirror never re-pushes an unchanged status, so
-    // the pair's loop would then exist only on the leader (bench round 3).
-    // A deck-local roll gesture must not consume the pair's loop: a locked
-    // follower goes straight to the roll branch, which stores the replica and
-    // restores it on release, exactly like the roll on an unpaired deck.
+    // Deck pairs (DECK_PAIR_PLAN.md R8 / 9.13 / 9.14): on a locked pair
+    // follower the running loop is the pair's status mirrored from the
+    // leader; on the pair leader the running loop *is* the pair transport's
+    // loop. The vanilla first-press semantics ("exit the running loop, roll
+    // on the next press") would destroy that shared loop on either member --
+    // for the follower silently (the edge-triggered mirror never re-pushes an
+    // unchanged status, bench round 3), for the leader audibly on both decks
+    // (bench round 4: a roll pad press on the leader exited the pair loop
+    // instead of rolling). A deck-local roll gesture must not consume the
+    // pair's loop: either member of an active pair goes straight to the roll
+    // branch, which stores the loop and restores it on release. A leader's
+    // roll is deck-local through slip: while it slips the pair plane is the
+    // leader's slip plane, so the other member keeps playing (5.2).
     EngineBuffer* pBuffer = getEngineBuffer();
     const bool bLockedPairFollower =
             pBuffer != nullptr && pBuffer->isPairLockedFollower();
+    const bool bActivePairLeader =
+            pBuffer != nullptr && pBuffer->isPairLeaderActive();
     if (pressed > 0.0) {
-        if (m_bLoopingEnabled && !bLockedPairFollower) {
+        if (m_bLoopingEnabled && !bLockedPairFollower && !bActivePairLeader) {
             setLoopingEnabled(false);
             // Make sure slip mode is not turned off if it was turned on
             // by something that was not a rolling beatloop.
@@ -1813,7 +1852,23 @@ void LoopingControl::slotBeatLoopRollActivate(double pressed) {
             m_bLoopRollActive = false;
             m_activeLoopRolls.clear();
         }
+        // Pair leader (DECK_PAIR_PLAN.md 9.14): restoreLoopInfo() re-applies
+        // the stored loop without enabling it -- the vanilla outcome for an
+        // unpaired deck, but on the leader it ends the pair's loop on both
+        // decks as soon as the roll is released. The shared loop is the pair
+        // transport's state (R8: the roll is deck-local, the loop stays the
+        // pair's), so re-establish it; the L->F mirror carries it back to
+        // the replica. This is the leader-side counterpart of the follower's
+        // slip-release re-anchor (9.13).
+        const LoopInfo prevLoopInfo = m_prevLoopInfo.getValue();
+        const bool bReestablishPairLoop = bActivePairLeader &&
+                m_bPrevLoopWasEnabled &&
+                prevLoopInfo.startPosition.isValid() &&
+                prevLoopInfo.endPosition.isValid();
         restoreLoopInfo();
+        if (bReestablishPairLoop) {
+            setLoopingEnabled(true);
+        }
     }
 }
 

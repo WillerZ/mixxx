@@ -288,6 +288,13 @@ class EngineBuffer : public EngineObject {
     /// may run inline on the thread of the writer) use it as well.
     bool isPairLockedFollower() const;
 
+    /// True while this buffer is the leader of an active pair: its transport
+    /// *is* the pair transport, and the other member plays whatever this
+    /// buffer publishes. Like isPairLockedFollower() this consults only the
+    /// role/active atomics, so writer-thread gates may use it (deck pair
+    /// roll gate, DECK_PAIR_PLAN.md 9.14).
+    bool isPairLeaderActive() const;
+
     /// The buffer's pair transport, but only while it actively participates
     /// in an engaged pair (role set and pair active). Used by EngineMixer to
     /// order the pair leader before its follower in the audio callback

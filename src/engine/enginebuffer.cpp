@@ -987,6 +987,11 @@ bool EngineBuffer::isPairLockedFollower() const {
     return !m_pSlipButton->toBool();
 }
 
+bool EngineBuffer::isPairLeaderActive() const {
+    return pairRole() == PairRole::PairLeader &&
+            activePairTransport() != nullptr;
+}
+
 EnginePairTransport* EngineBuffer::activePairTransport() const {
     if (pairRole() == PairRole::Unpaired) {
         return nullptr;

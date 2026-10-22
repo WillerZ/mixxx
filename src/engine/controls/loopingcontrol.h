@@ -237,6 +237,11 @@ class LoopingControl : public EngineControl {
     QStack<double> m_activeLoopRolls;
     ControlValueAtomic<LoopInfo> m_loopInfo;
     ControlValueAtomic<LoopInfo> m_prevLoopInfo;
+    // Deck pairs: whether the loop stored in m_prevLoopInfo was actually
+    // enabled when a roll stored it. An active pair leader restores it
+    // *enabled* on roll release -- the shared pair loop must survive a
+    // deck-local roll (DECK_PAIR_PLAN.md 9.14).
+    bool m_bPrevLoopWasEnabled;
     double m_prevLoopSize;
     LoopInfo m_oldLoopInfo;
     ControlValueAtomic<mixxx::audio::FramePos> m_currentPosition;
