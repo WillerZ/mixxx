@@ -2739,6 +2739,7 @@ if(BUILD_TESTING)
     src/test/cuecontrol_test.cpp
     src/test/deckpair_test.cpp
     src/test/deckpairmanager_test.cpp
+    src/test/deckpairslip_test.cpp
     src/test/deckpairtransport_test.cpp
     src/test/dbconnectionpool_test.cpp
     src/test/dbidtest.cpp

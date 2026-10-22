@@ -295,6 +295,13 @@ class EngineBuffer : public EngineObject {
     /// roll gate, DECK_PAIR_PLAN.md 9.14).
     bool isPairLeaderActive() const;
 
+    /// True while this buffer is the follower of an *active* pair, whether or
+    /// not it is slipping. The slip-plane feed uses it: a slipping follower
+    /// owns its audible transport (R8) but its slip plane -- the position it
+    /// snaps back to on release -- keeps following the pair plane
+    /// (DECK_PAIR_PLAN.md 5.4.3).
+    bool isPairFollowerActive() const;
+
     /// The buffer's pair transport, but only while it actively participates
     /// in an engaged pair (role set and pair active). Used by EngineMixer to
     /// order the pair leader before its follower in the audio callback
@@ -382,6 +389,11 @@ class EngineBuffer : public EngineObject {
     friend class CueControlTest;
     friend class HotcueControlTest;
     friend class LoopingControlTest;
+    // Deck pair slip semantics tests read the slip plane and the frozen slip
+    // rate directly (DECK_PAIR_PLAN.md T25/T27/T29: "slip plane == pair plane"
+    // is only observable on the buffer itself).
+    friend class DeckPairSlipTest;
+    friend class DeckPairSlipAudioTest;
 
     LoopingControl* m_pLoopingControl; // used for tests
     FRIEND_TEST(LoopingControlTest, LoopScale_HalvesLoop);
@@ -556,6 +568,12 @@ class EngineBuffer : public EngineObject {
     bool m_pairHaveLastPosEnd = false;
     mixxx::audio::FramePos m_pairLastPosEnd;
     static constexpr double kPairReanchorEpsilonFrames = 1e-9;
+    // Set on a slip release while paired: the re-lock's first consumed
+    // snapshot re-anchors the reader even when the pair plane held still,
+    // because the audible plane the data plane follows wandered during the
+    // slip and the suppressed snap-back seek left it behind
+    // (DECK_PAIR_PLAN.md 5.4.3, processSlip).
+    bool m_pairReanchorOnRelock = false;
     // Slip position at the beginning of the buffer: the pair plane the
     // leader publishes while itself slipping (DECK_PAIR_PLAN.md 5.2).
     mixxx::audio::FramePos m_slipPosAtBufferStart = mixxx::audio::kStartFramePos;

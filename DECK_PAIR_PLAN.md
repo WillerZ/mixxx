@@ -541,7 +541,7 @@ static "no slip keys" invariant test.
 *Exit:* T16–T20, T22–T23, T30, T37 green (every command class from **both** decks; follower
 status coherence).
 
-**Phase 4 — Slip semantics.**
+**Phase 4 — Slip semantics.** *(complete — see deviation notes §9.16, §9.17)*
 Follower slip-plane feed (§5.4.3), slip × pair matrix, deck-local rolls/reverse-roll,
 unpair-during-slip, slip across loop wraps.
 *Exit:* T13, T15a, T25, T27–T31 green (marquee slip test T25; deck-local roll T13).
@@ -1137,6 +1137,77 @@ the leader's waveform on the follower's screen during a leader roll. Pinned by T
 
 > **AI disclaimer:** this §9.16 was written autonomously by the AI assistant from the
 > round-6 bench report and code analysis; the human developer must re-verify on the rig.
+
+### 9.17 Phase 4 implementation — the slip-plane feed, the re-lock re-anchor, and what the matrix pinned
+
+Implemented in `EngineBuffer::processSlip()` / `processTrackLocked()` plus the new test file
+`src/test/deckpairslip_test.cpp` (T13 ×2, T15a, T25, T27–T29, T31; 50/50 deck-pair tests and
+the full unit suite green). Written autonomously by the AI assistant; the human developer
+must re-verify every gesture on the rig before anything goes upstream.
+
+**The feed (§5.4.3) is a position copy, not a rate.** While `role == PairFollower` and the
+pair is active, a slipping follower's `m_slipPos` is set to the *consumed snapshot's
+`posEnd`* every callback instead of advancing at the frozen `m_dSlipRate` with the vanilla
+loop simulation. Because the leader publishes in the same callback (EngineMixer ordering,
+5.6), the follower's snap-back target equals the pair plane with *exact* double equality —
+every test asserts `EXPECT_DOUBLE_EQ`, and T13/T25/T27/T28/T29 all hold it. The pair plane's
+loop/seek awareness (T29 lands the release inside the pair loop after a wrap) is inherited
+from the leader's own machinery, exactly as the design predicted — no follower-side loop
+code needed. `m_slipModeState` is picked from the follower's own loop replica exactly as the
+vanilla branch picks it (T29 pins `Armed` while the mirrored pair loop runs under the slip).
+`consume()` failure (fresh pair, leader loading) falls through to the vanilla local advance,
+so a follower never snaps to an invented position; once the leader publishes, the feed
+re-anchors the plane.
+
+**Gap found while implementing, fixed: the re-lock re-anchor.** On the slip-release edge the
+vanilla snap-back `seekExact(m_slipPos)` is suppressed by the 5.4.2 seek gate — by that
+point the follower is locked again (the CO is already 0), and the lock itself performs the
+position snap. That left the *data plane* (reader + scaler) on the audible plane whenever
+the pair plane had not moved in the meantime: with a paused pair, the DJ scrubs or rolls
+during the slip, releases, and the continuity check (`pairPosStart == last posEnd`) sees no
+discontinuity while the reader still points at the scrubbed position. The release edge now
+sets `m_pairReanchorOnRelock` when paired; the first consumed snapshot after the re-lock
+performs the same silent `notifySeek` + `m_pScale->clear()` re-anchor the leader-jump path
+uses (5.4.1) — no click, and it also covers the slip-quit-and-adopt variant of the hole.
+Reset with the rest of the pair state at disarming.
+
+**9.11 d carry-over resolved by verification (T25/T31 pin it).** The follower's rate book-
+keeping *is* synchronised at slip-engage: while locked, the scaler-parameter path runs with
+the snapshot speed, so `m_rate_old` tracks the pair rate and the rising edge's frozen
+`m_dSlipRate` equals the leader's current `m_rate_old` (asserted frame-exact in T25/T31).
+Rate-control internals need no re-sync: the rate COs are mirror-fresh until the slip (and
+the release re-anchor re-pushes whatever the pair changed mid-slip — T25 asserts the
+follower's `rate`/`rate_ratio` carry the leader's mid-slip 1.25 after release); the temp
+ramp restarts from the fresh button COs like on any live deck; and `PositionScratchController`
+re-initialises its reference positions on scratch enable, so a scratching slipping follower
+(T27) cannot inherit a stale scratch state. What *is* deck-local by construction — the
+audible rate during the slip — is exactly what R8 wants.
+
+**T31 semantics, as shipped:** unpairing a slipping follower releases only the feed. Slip
+stays engaged, play state stays, the leader is untouched; the snap target then advances
+*locally at the rate frozen at slip-engage* (plain-deck behaviour) rather than being
+literally frozen at the last pair plane — the plan's §5.1 wording "frozen at the last pair
+plane" is documented here as *starting from* the last pair plane and advancing normally,
+which is what "becomes a normal slipping deck" means operationally (T31 pins both halves,
+including that the eventual release snaps to the follower's own plane while the ex-partner
+is already away).
+
+**T15a mechanism (pinned, no code change):** `RateControl::slotReverseRollActivate` sets
+`slip_enabled` *before* `reverse` on press and clears `reverse` *before* `slip_enabled` on
+release, so every `reverse` write lands inside the slip window where the relay refuses —
+the pair never sees the reverse, and the follower's reverse survives because the mirror is
+halted for the whole slip (9.11 m/9.16).
+
+**Test ergonomics:** a `TEST_F` body derives from the fixture, so it cannot use the
+`friend class DeckPairSlip{,AudioTest}` grant directly — EngineBuffer internals are read
+through small fixture accessors (`slipPos()`, `slipRate()`, `rateOld()`,
+`slipModeState()`), the fixture being the friend. Wrap-based tests (T13, T29) run on the
+real-scaler `DeckPairSlipAudioTest` fixture; the mocked fixture never wraps (9.12 note).
+
+---
+
+> **AI disclaimer:** this §9.17 was written autonomously by the AI assistant as the Phase-4
+> implementation record; the human developer must re-verify on the rig.
 
 ## 10. Explicitly out of scope
 

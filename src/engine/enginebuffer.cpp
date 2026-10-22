@@ -947,6 +947,7 @@ void EngineBuffer::setPairTransport(
     // fields while consuming an active pair.
     m_pairHaveLastPosEnd = false;
     m_pairLastPosEnd = mixxx::audio::FramePos();
+    m_pairReanchorOnRelock = false;
     if (role == PairRole::Unpaired) {
         // Disarm: drop the role first, so the engine thread never sees a pair
         // role combined with a dangling transport pointer.
@@ -989,6 +990,11 @@ bool EngineBuffer::isPairLockedFollower() const {
 
 bool EngineBuffer::isPairLeaderActive() const {
     return pairRole() == PairRole::PairLeader &&
+            activePairTransport() != nullptr;
+}
+
+bool EngineBuffer::isPairFollowerActive() const {
+    return pairRole() == PairRole::PairFollower &&
             activePairTransport() != nullptr;
 }
 
@@ -1072,11 +1078,17 @@ void EngineBuffer::processTrackLocked(
         // leader moved discontinuously since the last published buffer end
         // (a seek on the leader, a slip rejoin, ...) re-anchor the follower's
         // data plane at the pair position: a plain reader seek without a
-        // crossfade read, so no click is produced (5.4.1/5.4.2).
+        // crossfade read, so no click is produced (5.4.1/5.4.2). A slip
+        // release additionally demands the re-anchor once (m_pairReanchorOn-
+        // Relock): the deck's data plane followed the slipping audible plane
+        // and must follow the position back onto the pair plane even when the
+        // pair plane itself held still (5.4.3).
         const mixxx::audio::FramePos pairPosStart(pairSnapshot.posStart);
-        const bool bPairDiscontinuity = !m_pairHaveLastPosEnd ||
+        const bool bPairDiscontinuity = m_pairReanchorOnRelock ||
+                !m_pairHaveLastPosEnd ||
                 fabs(pairPosStart.value() -
                         m_pairLastPosEnd.value()) > kPairReanchorEpsilonFrames;
+        m_pairReanchorOnRelock = false;
         if (bPairDiscontinuity) {
             m_pReadAheadManager->notifySeek(
                     pairPosStart.toSamplePos(m_channelCount));
@@ -1508,6 +1520,19 @@ void EngineBuffer::processSlip(std::size_t bufferSize) {
                 seekExact(m_slipPos.toNearestFrameBoundary());
             }
             m_slipPos = mixxx::audio::kStartFramePos;
+            if (isPairFollowerActive()) {
+                // Slip released while the pair is active: this deck re-locks
+                // with the very next snapshot, and its data plane must jump
+                // from the slipping deck's audible plane back onto the pair
+                // plane. The snap-back seek above is suppressed by the seek
+                // gate (the deck is locked again on this callback), and the
+                // snapshot continuity check alone does not see a jump when
+                // the pair plane held still while the DJ scrubbed or rolled
+                // (paused pair, immediate release): demand the silent
+                // reader/scaler re-anchor explicitly on the first consumed
+                // snapshot (DECK_PAIR_PLAN.md 5.4.1/5.4.3).
+                m_pairReanchorOnRelock = true;
+            }
         }
     }
 
@@ -1516,6 +1541,47 @@ void EngineBuffer::processSlip(std::size_t bufferSize) {
         // The slip position at the start of this buffer is the pair plane
         // while the deck is a slipping pair leader (DECK_PAIR_PLAN.md 5.2).
         m_slipPosAtBufferStart = m_slipPos;
+
+        // Deck pair slip-plane feed (DECK_PAIR_PLAN.md 5.4.3) -- the only
+        // slip interaction of the pair design. While this deck is the
+        // follower of an active pair its slip plane does not advance at the
+        // frozen m_dSlipRate with a local loop simulation: it *is* the pair
+        // plane, consumed fresh from the pair transport (the leader published
+        // in this very callback, EngineMixer ordering 5.6). The pair plane is
+        // loop- and seek-aware by construction: the leader's own
+        // processSeek/loop/repeat machinery produced it, and while the leader
+        // itself slips it is the leader's slip plane (5.2) -- so a slip
+        // release snaps back onto the uninterrupted pair transport (R8) and
+        // lands inside the pair's loop region across loop wraps. Slip enable
+        // (rising edge: m_slipPos = m_playPos, already the pair plane while
+        // locked) and slip release (snap to m_slipPos; while the pair is
+        // still locked the transport lock performs the snap itself, 5.4.1)
+        // need no further code. Only this snap-back target is fed; the
+        // audible plane keeps running the deck's own transport, and with the
+        // pair active-but-not-consuming this is the follower's single
+        // snapshot read of the callback.
+        //
+        // The slip mode state still comes from this deck's own loop replica,
+        // picked exactly as the vanilla branch below picks it, so waveform
+        // slip indicators stay coherent.
+        //
+        // No snapshot yet (fresh pair, leader loading): behave like a normal
+        // slipping deck and fall through to the local advance. Once the
+        // leader publishes, the feed takes over and re-anchors the plane.
+        PairTransportSnapshot pairPlane;
+        if (isPairFollowerActive() &&
+                pairTransport()->consume(&pairPlane)) {
+            m_slipPos = mixxx::audio::FramePos(pairPlane.posEnd);
+            if (m_pLoopingControl->isLoopingEnabled() &&
+                    m_pLoopingControl->loopOrRepeatWasEnabledBeforeSlipEnable() &&
+                    !m_pLoopingControl->isLoopRollActive()) {
+                m_slipModeState = SlipModeState::Armed;
+            } else {
+                m_slipModeState = SlipModeState::Running;
+            }
+            return;
+        }
+
         // `bufferSize` originates from `SoundManager::onDeviceOutputCallback`
         // and is always a multiple of channel count, so we can safely use integer division
         // to find the number of frames per buffer here.
