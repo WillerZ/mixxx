@@ -124,6 +124,22 @@ class DeckPairManager : public QObject {
         int leaderDeckIndex = -1;
         int followerDeckIndex = -1;
         bool active = false;
+        // Identifies the *current* bridge. Every bridge callback captures this
+        // value by value, and both bridge slots drop a delivery whose generation
+        // is not the pair's current one. Needed because a mirror delivery can be
+        // queued: the mirror listener uses an auto connection so an
+        // engine-originated leader write reaches the main thread as a pending
+        // invocation carrying a raw Pair*/BridgeEntry*, and teardown frees those
+        // entries -- without this, disbanding (or disbanding and re-forming
+        // before the queue drains, which the queued pair_enabled arbitration makes
+        // possible in a single event-loop pass) leaves that invocation holding
+        // freed memory. Bumped when the bridge comes up and *again* when it goes
+        // down, so both a stale delivery from the previous pair and one racing
+        // the current teardown are rejected. (Residual, pre-existing and noted in
+        // DECK_PAIR_PLAN.md 9.18: a *relay* delivery runs inline on the writer
+        // thread, so nothing short of keeping the entries alive for the manager's
+        // lifetime closes that one completely.)
+        quint64 bridgeGeneration = 0;
         // Static lifetime: the address is handed to the engine buffers, so it
         // must never change and the object is never destroyed.
         EnginePairTransport transport;
@@ -190,13 +206,19 @@ class DeckPairManager : public QObject {
     /// re-anchor waits for the *last* slip release in the pair
     /// (9.11 m, 9.16).
     static bool pairMemberSlipping(const Pair& pair);
+    /// Debug-asserts the invariant of DECK_PAIR_PLAN.md 5.7 that the members
+    /// of an active pair hold the same track. Called from the CO bridge, i.e.
+    /// off the audio callback.
+    void checkSameTrackInvariant(const Pair& pair) const;
     /// Adopts the leader's current mirror statuses on the follower once
     /// (bridge formation and slip release on either member, 9.11 m, 9.16).
     void refreshMirrorValues(Pair& pair);
     /// Relays one follower command to the leader (F -> L, 5.5).
-    void slotBridgeRelay(Pair* pPair, BridgeEntry* pEntry, double value);
+    void slotBridgeRelay(
+            Pair* pPair, BridgeEntry* pEntry, double value, quint64 generation);
     /// Mirrors one leader status onto the follower (L -> F, 5.5).
-    void slotBridgeMirror(Pair* pPair, BridgeEntry* pEntry, double value);
+    void slotBridgeMirror(
+            Pair* pPair, BridgeEntry* pEntry, double value, quint64 generation);
     /// Writes an owner-only (read-only) mirror status the way its engine
     /// owner writes it.
     static void forceMirrorValue(

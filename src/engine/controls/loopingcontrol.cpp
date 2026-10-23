@@ -1983,6 +1983,20 @@ void LoopingControl::updateLoopCue(const LoopInfo& loopInfo) {
         return;
     }
 
+    // Deck pairs, deliberately *not* handled here: both members of a pair hold
+    // the same Track object, and this function is a check-then-act on the
+    // shared cue list, so an audit asked whether the locked follower -- fed the
+    // leader's region as two separate mirror writes -- would remove the loop cue
+    // the leader had just written and then recreate it as a new Cue, costing the
+    // DJ a loop cue and a library DbId. An isPairLockedFollower() guard was
+    // written and then removed again: measured both ways, the pair produces
+    // exactly one loop cue with a stable Cue identity and one cuesUpdated burst
+    // per gesture, from a gesture on either member, because the relayed gesture
+    // also runs on the follower, so its LoopInfo is in step and no write is
+    // ever torn. DeckPairAudioTest.LoopCueOnTheSharedTrackIsWrittenOnlyByTheLeader
+    // pins that, and fails if a later change really does make both members
+    // churn the shared cue. See DECK_PAIR_PLAN.md 9.18.
+
     // We need valid start/end and start < end for a loop cue
     if (!loopInfo.startPosition.isValid() || !loopInfo.endPosition.isValid() ||
             loopInfo.endPosition <= loopInfo.startPosition) {

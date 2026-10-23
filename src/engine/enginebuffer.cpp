@@ -947,6 +947,8 @@ void EngineBuffer::setPairTransport(
     // fields while consuming an active pair.
     m_pairHaveLastPosEnd = false;
     m_pairLastPosEnd = mixxx::audio::FramePos();
+    m_pairHaveLastSnapshot = false;
+    m_pairLastSnapshot = PairTransportSnapshot();
     m_pairReanchorOnRelock = false;
     if (role == PairRole::Unpaired) {
         // Disarm: drop the role first, so the engine thread never sees a pair
@@ -1070,8 +1072,41 @@ void EngineBuffer::processTrackLocked(
         m_pRateControl->pairFollowerConsumeAccumulators();
     }
     PairTransportSnapshot pairSnapshot;
-    const bool bPairConsumed = bPairLockedFollower &&
+    bool bPairConsumed = bPairLockedFollower &&
             pPairTransport->consume(&pairSnapshot);
+    if (bPairConsumed) {
+        // Stall detection. consume() is a seqlock read: it hands out the last
+        // published value for as long as the lane is active, so "it returned
+        // true" says nothing about whether the leader published *this* callback.
+        // That matters because an unchanged plane is read as a discontinuity:
+        // posStart never equals the previous posEnd once the pair has ever been
+        // moving, so a leader that stops publishing while this follower stays
+        // locked would make it call notifySeek() and clear its scaler on every
+        // single callback, thrashing its reader and its chunk cache forever.
+        //
+        // Freshness is the publication sequence, never the contents. Contents
+        // cannot make this decision: a leader wrapping inside a loop whose
+        // length divides the per-callback frame advance publishes
+        // byte-identical positions every callback while playing at full speed,
+        // and a content comparison would mute this member mid-loop -- a far
+        // worse failure than the one being fixed. A paused leader republishes
+        // every callback, so its sequence advances and the normal no-movement
+        // path applies to it (hold position, speed 0) rather than this one.
+        //
+        // m_pairReanchorOnRelock is deliberately excluded: a slip release onto a
+        // paused pair must still re-anchor its data plane, so that first
+        // snapshot is consumed even when nothing was published.
+        if (m_pairHaveLastSnapshot &&
+                pairSnapshot.sequence == m_pairLastSnapshot.sequence &&
+                !m_pairReanchorOnRelock) {
+            bPairConsumed = false;
+        } else {
+            m_pairLastSnapshot = pairSnapshot;
+            m_pairHaveLastSnapshot = true;
+        }
+    } else {
+        m_pairHaveLastSnapshot = false;
+    }
 
     if (bPairLockedFollower && bPairConsumed) {
         // Adopt the pair position as this buffer's start position. If the
@@ -1116,9 +1151,12 @@ void EngineBuffer::processTrackLocked(
     }
     double speed = 0.0;
     if (bPairLockedFollower) {
-        // Skip the speed calculation entirely (see above). Without a
-        // snapshot -- e.g. while the leader is loading -- the follower holds
-        // its position and emits silence: speed and rate stay 0.
+        // Skip the speed calculation entirely (see above). Without a *fresh*
+        // snapshot the follower holds its position and emits silence: speed and
+        // rate stay 0. That covers both a leader that has not published yet
+        // (still loading -- consume() returns false, or a true-but-unusable
+        // first value) and one that has stopped publishing altogether, which
+        // the stall check above folds into the same case.
         if (bPairConsumed) {
             speed = pairSnapshot.speed;
         }

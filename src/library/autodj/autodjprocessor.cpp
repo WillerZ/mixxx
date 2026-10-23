@@ -1,7 +1,9 @@
 #include "library/autodj/autodjprocessor.h"
 
+#include "control/controlobject.h"
 #include "engine/channels/enginedeck.h"
 #include "mixer/basetrackplayer.h"
+#include "mixer/deckpairmanager.h"
 #include "mixer/playermanager.h"
 #include "moc_autodjprocessor.cpp"
 #include "track/track.h"
@@ -19,6 +21,34 @@ constexpr double kKeepPosition = -1.0;
 
 // A track needs to be longer than two callbacks to not stop AutoDJ
 constexpr double kMinimumTrackDurationSec = 0.2;
+
+/// Deck pairs: is pDeck the partner of pBound, and are the two currently
+/// paired? Used by toggleAutoDJ() so that a pair does not lock Auto DJ out.
+///
+/// A pair plays as one deck (DECK_PAIR_PLAN.md R7): the partner's play state is
+/// mirrored from the leader, so a bound deck that is playing makes its partner
+/// read as playing too, and Auto DJ would refuse itself -- decks 1+2 bound for
+/// the crossfader, 1+3 paired, deck 1 playing, deck 3 "also" playing. An
+/// unpaired deck that is playing really is a third deck doing something, and
+/// then the original refusal still applies; hence the pair_enabled check.
+///
+/// The pairing is read from the pair_enabled controls instead of from
+/// DeckPairManager: the library layer has no handle on the manager and should
+/// not acquire one for this. The partner itself follows the fixed pairing rule
+/// of the feature (decks 1+3 and 2+4, DeckPairManager::partnerDeckIndex), which
+/// the deck group encodes directly.
+bool isPairPartnerOf(const DeckAttributes* pDeck, const DeckAttributes* pBound) {
+    if (pDeck == nullptr || pBound == nullptr) {
+        return false;
+    }
+    if (DeckPairManager::partnerDeckIndex(pBound->index) != pDeck->index) {
+        return false;
+    }
+    return ControlObject::get(ConfigKey(pBound->group,
+                   QStringLiteral("pair_enabled"))) > 0.0 &&
+            ControlObject::get(ConfigKey(pDeck->group,
+                    QStringLiteral("pair_enabled"))) > 0.0;
+}
 
 const char* autoDJStateName(AutoDJProcessor::AutoDJState state) {
     switch (state) {
@@ -427,6 +457,11 @@ AutoDJProcessor::AutoDJError AutoDJProcessor::toggleAutoDJ(bool enable) {
                 continue;
             }
             if (pDeck.get() == pRightDeck) {
+                continue;
+            }
+            if (isPairPartnerOf(pDeck.get(), pLeftDeck) ||
+                    isPairPartnerOf(pDeck.get(), pRightDeck)) {
+                // Not an unused deck: it is the other half of a bound one.
                 continue;
             }
             if (pDeck->isPlaying()) {

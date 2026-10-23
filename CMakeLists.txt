@@ -2826,6 +2826,7 @@ if(BUILD_TESTING)
     set(
       src-mixxx-test
       ${src-mixxx-test}
+      src/test/deckpairstem_test.cpp
       src/test/stemtest.cpp
       src/test/steminfotest.cpp
       src/test/stemcontrolobjecttest.cpp

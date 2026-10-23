@@ -154,5 +154,49 @@ TEST(EnginePairTransportTest, ConcurrentPublishConsumeNeverTears) {
             << "the final snapshot was never observed as a whole";
 }
 
+// Phase 5 (DECK_PAIR_PLAN.md 9.18): the follower's stall detection depends on
+// being able to tell "no new publication" from "the plane is not moving", and
+// that is exactly what `sequence` is for. Pin the primitive here rather than
+// only through the engine, because the failure mode the check exists for -- a
+// leader that stops publishing while the follower stays locked -- is not
+// constructible at that level in a unit test.
+TEST(EnginePairTransportTest, SequenceDistinguishesStaleFromUnmoved) {
+    EnginePairTransport transport;
+    transport.setActive(true);
+
+    transport.publish(makeSnapshot(7));
+    PairTransportSnapshot first;
+    ASSERT_TRUE(transport.consume(&first));
+
+    // Consume again with no publish in between: same contents *and* the same
+    // sequence, i.e. a consumer can see it learned nothing new.
+    PairTransportSnapshot again;
+    ASSERT_TRUE(transport.consume(&again));
+    EXPECT_TRUE(first == again) << "the payload changed on its own";
+    EXPECT_EQ(first.sequence, again.sequence)
+            << "a stale read is indistinguishable from a fresh one";
+
+    // A leader that republishes the *same values* (the paused-pair case) bumps
+    // the sequence: the follower must keep consuming rather than treat a pause
+    // as a stall.
+    transport.publish(makeSnapshot(7));
+    PairTransportSnapshot republished;
+    ASSERT_TRUE(transport.consume(&republished));
+    EXPECT_TRUE(first == republished)
+            << "republishing identical values changed the payload";
+    EXPECT_NE(first.sequence, republished.sequence)
+            << "a republished plane is not recognisable as new";
+
+    // And a leader that wraps inside a short loop publishes identical positions
+    // while playing: the sequence is the only thing that keeps the follower
+    // from muting itself (9.18 review).
+    transport.publish(makeSnapshot(7));
+    transport.publish(makeSnapshot(7));
+    PairTransportSnapshot afterWrap;
+    ASSERT_TRUE(transport.consume(&afterWrap));
+    EXPECT_TRUE(afterWrap == first);
+    EXPECT_NE(afterWrap.sequence, first.sequence);
+}
+
 // End of autonomously AI-generated content; see the disclaimer at the top of
 // this file.

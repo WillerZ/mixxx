@@ -568,6 +568,16 @@ class EngineBuffer : public EngineObject {
     bool m_pairHaveLastPosEnd = false;
     mixxx::audio::FramePos m_pairLastPosEnd;
     static constexpr double kPairReanchorEpsilonFrames = 1e-9;
+    // Freshness of the last consumed transport snapshot (DECK_PAIR_PLAN.md
+    // 9.18). The seqlock lane always hands out its most recently published
+    // value, so a leader that stopped publishing -- pair-active cleared without
+    // the follower noticing, wedged in a callback, or gone -- cannot be told
+    // apart from the return value alone. And an unchanged snapshot looks like a
+    // discontinuity on *every* callback as soon as the pair was ever moving
+    // (posStart never equals the previous posEnd), which would leave the
+    // follower re-seeking and clearing its scaler forever.
+    bool m_pairHaveLastSnapshot = false;
+    PairTransportSnapshot m_pairLastSnapshot;
     // Set on a slip release while paired: the re-lock's first consumed
     // snapshot re-anchors the reader even when the pair plane held still,
     // because the audible plane the data plane follows wandered during the

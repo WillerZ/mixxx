@@ -473,7 +473,13 @@ it, a permanent one-buffer stem offset; regression test T10 fails loudly).
   for v1 and documented: edits made while a member is slipping mutate the shared cues
   (last-writer-wins); the **temp loop cue (hotcue id −1)** is written by each deck's
   `LoopingControl::updateLoopCue` (`loopingcontrol.cpp:1912–1940`) — while locked the
-  follower's loop points are mirrors → same-value writes; suppress-if-proven-needed hook
+  follower's loop points are mirrors. **Corrected in 9.18:** the "same-value
+  writes" argument was wrong in both directions — the mirror writes are *not*
+  same-value (the follower's own LoopInfo is written by the relayed gesture, and
+  the two mirror writes do arrive as separate CO changes), and the feared
+  remove/recreate of the shared temp loop cue does not happen; measured with and
+  without a suppression gate the pair keeps exactly one loop cue with a stable
+  `Cue` identity. No gate was added; T33 pins the invariant instead.
   reserved for Phase 5. Beatgrid edits (`beats_adjust_*`, `bpm_tap`) are shared-track metadata
   by nature — relayed once to the leader so a single write path applies them.
 - **Slip-time hotcue SET on a slipping follower** stores the point at the follower's *audible*
@@ -546,13 +552,24 @@ Follower slip-plane feed (§5.4.3), slip × pair matrix, deck-local rolls/revers
 unpair-during-slip, slip across loop wraps.
 *Exit:* T13, T15a, T25, T27–T31 green (marquee slip test T25; deck-local roll T13).
 
-**Phase 5 — Hardening & integration.**
+**Phase 5 — Hardening & integration.** *(implemented — see §9.18; **bench
+sign-off outstanding**, `DECK_PAIR_BENCH_PROTOCOL.md`)*
 STEM-gated pair test (vocal-mute/instrumental-solo use case, T26), shared-metadata audit
 (temp-loop suppression if proven needed), passthrough/AutoDJ interlocks, perf pass (dual
 readers on one Track: chunk-cache doubling, `hintAndMaybeWake` worker wakes — §9.3), `co_dump` and
 `ControlPickerMenu` entries, manual and mapping-doc notes (deck-local rolls!), and the **human
 DJ-rig test protocol** required by AGENTS.md before any PR.
 *Exit:* T26, T32–T38 green; sanitizer run of the deck-pair suite; developer's bench sign-off.
+
+*Status of each exit item, honestly stated (details in §9.18):* T26 ✅ (STEM-gated, 2/2, ALAC
+fixtures excluded with a documented reason — they stop decoding at ~frame 20000 in this tree,
+unrelated to pairs). T32 ✅, T33 ✅, T34 ✅, T36 ✅, T37 ✅, T8/T8b extended to the leader ✅.
+T35 (the "no drift over a track" soak) is covered by T34 rather than as a separate case.
+**Sanitizer run: not performed** — left for the developer with the command recorded in the
+bench protocol. **Developer's bench sign-off: not performed and not performable by the
+assistant** — that is precisely the human gate `AGENTS.md` requires, and
+`DECK_PAIR_BENCH_PROTOCOL.md` is the deliverable that carries it. The 90-test deck-pair/AutoDJ
+suite is green in this build (STEM=ON, RelWithDebInfo).
 
 Registration checklist (Phases 1 & 5): new `.cpp`s into root `CMakeLists.txt`
 `add_library(mixxx-lib …)` list (~:1199+) and `set(src-mixxx-test …)` (:2925–3042,
@@ -589,7 +606,7 @@ same-callback frame-exact position equality + play/loop-state equality; and a de
 | T5 | mgr | **Unpair from follower**, both playing | pair_enabled 0/0; play continues; positions equal; follower seek then diverges (no relay) |
 | T6 | mgr | **Load** on follower / on leader / via `PlayerManager` funnel / direct `slotLoadTrack` (QML path) | same track on both via every path, exactly one effective pair load; double-tap-clone path guarded |
 | T7 | mgr | **Eject** on either member | both empty, pair stays engaged; subsequent load lands on both |
-| T8 | mgr | Follower `sync_enabled` / `vinylcontrol_enabled` / `passthrough` while paired | bounced to 0 + warning; leader's sync to another deck still works; follower rides corrected pair plane |
+| T8 | mgr | Follower `sync_enabled` / `vinylcontrol_enabled` / `passthrough` while paired | sync and vinyl **bounced to 0** + warning; **passthrough wins and disbands the pair** (both members, leader included — 9.18 Gap C; the plan earlier said "bounced to 0" here, which was never the implemented behaviour); leader's sync to another deck still works; follower rides corrected pair plane |
 | T9 | engine | **Play/pause** from follower and from leader | both `play==1`; positions advance in lock (frame-exact) every callback |
 | T10 | engine | Long-run drift killer: rate 1.25, **50 buffers**, mid-run pitch wobble from **follower** | `getExactPlayPos()` equal every callback, both actually advancing (also detects ordering loss: one-buffer offset) |
 | T11 | engine | **Hotcue set on leader, fire on follower**; then **set on follower, fire on leader** | both land on same frame; `hotcue_N_status` equal on both groups |
@@ -660,6 +677,13 @@ co_dump baseline: only new `[ChannelN]` key is `pair_enabled`).
    and is corrected before slip-engage exposes it.
 6. **Shared-track metadata** (§5.8): slip-time cue edits, temp-loop-cue contention — accepted
    and documented; suppress-if-proven-needed hook in Phase 5.
+   **Resolved in Phase 5: not proven needed, so not built.** The predicted
+   temp-loop-cue destroy/recreate was measured with and without a suppression
+   gate and does not occur (one cue, stable `Cue` identity, one `cuesUpdated`
+   burst per gesture, from either member) — see 9.18, "Refused 1". T33 pins the
+   invariant instead of a code change. Slip-time cue edits on one member remain
+   a last-writer-wins write to the shared `Track`, which is what an unpaired
+   double-load of the same track already is.
 7. **Tunable behaviors flagged for bench testing** (each is a table entry, not architecture):
    auto-disband vs persist on eject; `keylock`/`pitch_adjust` shared vs per-deck; follower
    rate-slider mirror granularity (potmeter flood rate); **all-or-nothing pair load/eject**
@@ -1208,6 +1232,196 @@ real-scaler `DeckPairSlipAudioTest` fixture; the mocked fixture never wraps (9.1
 
 > **AI disclaimer:** this §9.17 was written autonomously by the AI assistant as the Phase-4
 > implementation record; the human developer must re-verify on the rig.
+
+### 9.18 Phase 5 implementation — hardening, three audits, two changes refused, and the bench protocol
+
+Implemented in `deckpairmanager.{h,cpp}`, `enginebuffer.{h,cpp}`,
+`autodjprocessor.cpp`, `controlpickermenu.cpp`, plus `deckpair_test.cpp`, the new
+`deckpairstem_test.cpp` and `autodjprocessor_test.cpp`. Deck-pair suite 90 tests
+green (`DeckPair*`, `EnginePairTransport*`, `AutoDJ*`). Written autonomously by
+the AI assistant; **the human bench sign-off required by `AGENTS.md` has not
+happened** — see `DECK_PAIR_BENCH_PROTOCOL.md`, which is the deliverable for that
+gate and whose results table is deliberately empty.
+
+**What changed in production code, and why each one is justified by evidence
+rather than by suspicion.** Phase 5 ran three read-only audits (dual-reader
+cost, shared metadata, passthrough/AutoDJ interlocks) and each produced a
+prediction. Two predictions were measured, found not to hold, and the
+corresponding change was *refused*; three were confirmed and fixed. Recording
+the refusals matters as much as the fixes — they are the parts a reviewer would
+otherwise re-litigate.
+
+*Refused 1 — temp loop cue suppression (the shared-metadata audit's main
+finding, and the one this phase was scoped to decide).* The audit predicted the
+locked follower would corrupt the shared `Track`'s temp loop cue: both members
+hold the same `Track`; `LoopingControl::updateLoopCue()` is a check-then-act on
+the shared cue list; the follower is fed the leader's region as two separate
+mirror writes while its own `LoopInfo` is supposedly stale, so the first write
+looks torn and calls `removeTempLoopCue()` on the leader's cue and the second
+recreates it as a *new* `Cue` — a lost loop cue for a main-loop iteration, a new
+`DbId`, colour and label gone, three shared-`Track` mutations where an unpaired
+deck makes one. An `isPairLockedFollower()` guard was implemented accordingly
+(the same gate `RateControl`/`CueControl` use). It was then removed again:
+measured both ways, with the gesture issued on *either* member, the pair produces
+exactly one loop cue with a **stable cue identity** and a single `cuesUpdated`
+burst per gesture. The premise is wrong — the relayed gesture also runs on the
+follower, so its `LoopInfo` is in step and no write is ever torn. Suppressing a
+whole writer on the shared `Track` without a demonstrated fault trades a
+hypothetical bug for a real behaviour change. The regression test stays
+(T33 `LoopCueOnTheSharedTrackIsWrittenOnlyTheLeader`) with `loopingcontrol.cpp`
+carrying a comment that says why there is no guard. **Consequence for 5.8: the
+"the follower must not write shared metadata" argument that 5.8 gave for the
+temp loop cue is not needed and must not be quoted as a reason for a gate.**
+
+*Refused 2 — a new engine hook for per-deck audio.* §9.3 asked whether the
+dual-reader design needs an engine-side tap to compare member audio. It does
+not: `EngineMixer::getChannelBuffer(group)` already exposes per-deck output and
+T32 uses it. No engine change.
+
+*Fixed 1 — a refused propagated load now disbands the pair (5.7, Gap A).*
+`propagateTrack()` with `LoadWhenDeckPlaying::Reject` used to leave the pair
+engaged across two different tracks. That state is not a degraded pair: a locked
+follower replays the leader's *frame positions* against whichever track it
+holds, i.e. two unrelated tracks at one transport, with nothing to detect or
+heal it. The refusal path now disbands. Two tests (`PropagatedLoad…`,
+`EjectHonours…`) had pinned the old divergence-as-acceptable behaviour and were
+re-pinned to the disband; that they passed before is the usual lesson that a
+test asserts what it was written against, not what is true. A
+`checkSameTrackInvariant()` DEBUG_ASSERT was added to both bridge slots to make
+the divergence audible in a debug build if it is ever reintroduced.
+
+*Fixed 2 — formation no longer silently skips track adoption.* Found while
+re-pairing in the Gap A tests: `synchronizeTracks()` adopted via
+`cloneFromChannel()`, which takes the track from the source deck's **engine
+buffer** and returns silently when a load is still in flight there. Unpair and
+re-pair promptly — a normal DJ sequence — and formation "succeeded" with the
+members on two different tracks. Formation now falls back to a plain
+`slotLoadTrack()` of the leader's deck-level track when the clone source is not
+ready; the clone only contributes frame alignment of the first buffer, which
+needs a loaded source anyway and is irrelevant while the pair is not yet
+running.
+
+*Fixed 3 — thread affinity of the `pair_enabled` and `passthrough` listeners
+(Gap C).* Both were `Qt::DirectConnection`, so a mapping on a controller thread
+writing either control ran pair formation or teardown — creating and destroying
+the members' `ControlProxy` objects — on the *controller* thread. Both are now
+`Qt::AutoConnection`: a same-thread write (skin button) stays synchronous, a
+foreign writer is deferred onto the manager's thread, matching the leader-side
+mirror listener in `buildBridge()`. `PassthroughFromAnotherThreadDisbandsSafely`
+writes from a `std::thread`, waits for the write *without* running the main
+event loop, and asserts the pair is still intact; it fails with
+`DirectConnection` and passes now. Passthrough was also extended to the leader
+side in the existing test — the leader is the member where a stuck passthrough
+mutes the transport the partner is replaying.
+
+*Fixed 4 — AutoDJ is no longer locked out by its own mirror (Gap D).* Decks 1+2
+bound for the crossfader, 1+3 paired, deck 1 playing: the partner reads as
+playing and `toggleAutoDJ()` returned `ADJ_UNUSED_DECK_PLAYING` — an error the
+DJ cannot act on, because stopping the partner stops the pair.
+`isPairPartnerOf()` skips a candidate that is the partner of a bound deck
+*while the pair is engaged*; an unpaired third deck playing still refuses, which
+`Decks34PlayingWarning` and the negative half of the new test both pin. The
+check reads the `pair_enabled` controls rather than reaching for
+`DeckPairManager`: the library layer has no handle on the manager, and acquiring
+one for this would be the larger coupling.
+
+*Fixed 5 — the follower now detects a stalled pair plane (Gap E).*
+`EnginePairTransport::consume()` is a seqlock read: it hands out the last
+published value forever, and says nothing about freshness. A leader that stops
+publishing while the follower stays locked was therefore not a stall but a
+*discontinuity on every single callback* (`posStart` never equals the previous
+`posEnd` once the pair was ever moving), so the follower called
+`notifySeek()` and cleared its scaler every callback — thrashing its reader and
+its chunk cache indefinitely, while adopting a stale position and a stale speed.
+`EngineBuffer` now remembers the last consumed snapshot and treats an unchanged
+one as no snapshot: hold position, speed and rate 0. A paused leader publishes an
+unchanged snapshot deliberately, and holding is also the right answer for it, so
+the two cases need no distinction. State is reset in `setPairTransport()`, i.e.
+on formation and teardown. The comment at the speed selection that claimed the
+no-snapshot case was "e.g. while the leader is loading" was factually wrong
+(`consume()` returns the stale value there, not `false`) and now says what
+actually happens.
+
+**Tests added.** T26 (`deckpairstem_test.cpp`, STEM-gated, 2/2) is the stem-split
+statement of the architecture: identical settings ⇒ identical audio, split stems
+⇒ one transport and two data planes, with silence-aware sampling because both
+members can miss the same chunk. T32 (real scalers) is the audio-level statement
+of the lock: bit-exact member buffers in steady state, across a rate change and a
+loop. Both were written *before* their flakiness was understood, and both taught
+the same lesson twice, so it is recorded here: **strict per-callback sample
+equality is not testable against a real reader.** A `CachingReader` miss emits
+silence and then ramps back in to avoid a pop (9.3), and the length of that
+window depends on how fast the reader thread happens to decode. Demanding
+equality through it produced a test that failed one run in five. T32 now asserts
+*position* strictly on every callback — the pair plane is exact by construction —
+and watches audio for **sustained** disagreement, which is what a drifting
+follower actually looks like; the isolated-burst tolerance is named, counted and
+logged rather than silent. T34 is the long soak (2000 callbacks plus a
+pause/resume cycle that also exercises Gap E's recovery path); T36 covers
+re-pairing and role swapping, and pins that re-pairing onto an audible partner is
+**refused** (R5) — so after F1-style refusal the DJ must stop a deck first, which
+is a design decision the bench protocol asks the developer to reconfirm rather
+than silently accept (bench step F4).
+
+**`co_dump` and the picker.** `[Channel1..4],pair_enabled` is present in
+`co_dump_inital.csv`; there is no automated consumer of that file in-tree, so
+"regenerate the dump" reduces to it being there, which it is. The
+`ControlPickerMenu` entry (`Transport -> Deck Pair`) is what makes the control
+mappable, and its description text is the DJ-facing documentation: it names slip,
+loop rolls and reverse roll as deck-specific, because a DJ who maps the button
+learns that from the picker rather than from this file.
+
+**Manual and mapping documentation.** The Mixxx manual lives in a separate
+repository, so the user-facing wording is provided here ready to paste rather
+than edited in place, and per `AGENTS.md` a human must submit it:
+
+> When two decks are paired, they play one track as one deck: transport, tempo,
+> loops and cues act on the pair, whichever deck you touch. Three things stay
+> with the individual deck on purpose: slip mode, and any gesture that holds the
+> track in place — a hotcue roll, a beatloop roll, reverse roll, or a scratch.
+> The other deck keeps playing while you do them. Each deck also keeps its own
+> mixer strip and its own stem mute/solo/gain, so a pair can be split across the
+> mixer or across stem outputs. Pairing is refused while the other deck is
+> audible, and is released automatically when you enable passthrough or vinyl
+> control on either deck.
+
+Controller mappings need no change, and a mapping that mirrors roll gestures to
+the partner is fighting R8. The bench protocol repeats this in its section C.
+
+**Perf item §9.3 — measured, no change.** The audit's verdict is that the dual
+reader costs exactly what R11 says it should and nothing structural: the chunk
+cache is per-`CachingReader` (80 × 8192 frames, allocated per deck whether or
+not it is paired), read hints are deduplicated, the worker scheduler wakes at
+most once per callback, a cache miss yields silence with the position kept, and
+there are **no mutexes in the real-time read path or in `src/sources/`** at all.
+A pair therefore costs 2× decode CPU and 2× cache occupancy — the intended price
+of two independent data planes — and there is no shared bottleneck to remove.
+Nothing was changed. The bench does not need to measure this blind: the existing
+counters report it, `cachingreader.cpp:472` (cache hits/misses) and
+`readaheadmanager.cpp:163` (overrun/seek accounting), which is what bench G1–G3
+should be read against.
+
+**Sanitizers.** Not run: an ASan/UBSan rebuild of `mixxx-test` is a full
+recompile and was left for the developer, and `AGENTS.md` puts the sign-off in
+human hands anyway. The command is recorded in `DECK_PAIR_BENCH_PROTOCOL.md`
+alongside the suite run so the sanitizer evidence lands next to the bench
+results rather than in a comment on a diff.
+
+**Corrections to this plan.** 5.8 and 6.2 Risk 6 argued for follower-side
+suppression of the temp loop cue on the grounds that mirror writes arrive torn;
+measured, they do not (above, Refused 1) — the conclusion "one member writes
+shared metadata" is now enforced by test, not by code. The §8 test table's T8
+row still says a follower's passthrough is "bounced to 0"; the implemented and
+tested behaviour (T8/T8b, `PassthroughDisbandsThePair`) is **disband**, matching
+5.8, and the row has been corrected below.
+
+---
+
+> **AI disclaimer:** this §9.18 was written autonomously by the AI assistant as
+> the Phase-5 implementation record. It records measurements taken in the
+> automated harness only. Nothing in it has been verified on DJ hardware, and
+> the Phase-5 exit criterion "developer's bench sign-off" is **outstanding**;
+> `DECK_PAIR_BENCH_PROTOCOL.md` is the gate.
 
 ## 10. Explicitly out of scope
 

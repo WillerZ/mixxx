@@ -6,6 +6,7 @@
 //
 #include "mixer/deckpairmanager.h"
 
+#include <QThread>
 #include <QTimer>
 
 #include "control/controlobject.h"
@@ -446,12 +447,20 @@ void DeckPairManager::addDeck(int deckIndex, Deck* pDeck) {
             ConfigKey(group, QString::fromLatin1(kPairEnabledItem)));
     pMember->pPairEnabled->setDescription(tr(
             "Act together with the partner deck as a single deck"));
+    // Thread affinity: a mapping on a controller thread may write pair_enabled,
+    // and the arbitration below forms or disbands a pair -- it creates and
+    // destroys the member's ControlProxies, walks the decks and the engine
+    // buffers, and touches the bridge tables. None of that may run on a
+    // controller thread. AutoConnection keeps a same-thread write (a skin
+    // button, the normal case) synchronous, and defers a foreign writer onto
+    // the thread the manager lives on, exactly like the leader-side mirror
+    // listener in buildBridge() below.
     pMember->pPairEnabled->connectValueChangeRequest(
             this,
             [this, deckIndex](double value) {
                 slotPairEnabledChangeRequest(deckIndex, value);
             },
-            Qt::DirectConnection);
+            Qt::AutoConnection);
 
     pMember->pPlay = make_parented<ControlProxy>(
             group, QStringLiteral("play"), this);
@@ -459,11 +468,14 @@ void DeckPairManager::addDeck(int deckIndex, Deck* pDeck) {
             group, QStringLiteral("play_latched"), this);
     pMember->pPassthrough = make_parented<ControlProxy>(
             group, QStringLiteral("passthrough"), this);
+    // Same reasoning as pair_enabled above, and this one is not hypothetical:
+    // vinyl control writes passthrough from the controller thread, and
+    // slotPassthroughChanged() disbands the pair right there.
     pMember->pPassthrough->connectValueChanged(
             this,
             [this, deckIndex](
                     double value) { slotPassthroughChanged(deckIndex, value); },
-            Qt::DirectConnection);
+            Qt::AutoConnection);
 
     // Transport authorities of the decks themselves. They exist once the deck
     // has been constructed; missing controls are simply not refused.
@@ -772,6 +784,13 @@ void DeckPairManager::disarmPair(Pair& pair) {
 
     // Teardown order (5.1): stop the bridge first, then clear the
     // engine-visible flags, then drop the pointer handoff.
+    //
+    // Retire the bridge generation *before* anything is freed: a queued mirror
+    // invocation still holding a Pair*/BridgeEntry* is then recognised as stale
+    // instead of being dereferenced. pair.active is only cleared at the end of
+    // this function, so before this line the slots' own guard would have waved a
+    // stale delivery straight through to freed entries.
+    ++pair.bridgeGeneration;
     clearBridge(pair);
 
     pair.transport.setActive(false);
@@ -816,24 +835,72 @@ void DeckPairManager::synchronizeTracks(Member& leader, Member& follower) {
             // stem selection: stem mute/solo/gain are strictly per deck (R9).
             kLoggerDeckPair.debug() << "Follower" << follower.group
                                     << "adopts the track of leader" << leader.group;
-            follower.pDeck->cloneFromChannel(
-                    leader.pDeck->getEngineDeck(),
+            // cloneFromChannel() takes the track from the source deck's
+            // *engine buffer* and returns silently while a load is still in
+            // flight there. That is a real state, not a corner case: unpair
+            // and re-pair straight away, or pair a deck whose load has just
+            // been requested. A silent no-op would leave the pair locked
+            // across two tracks, so fall back to a plain load of the deck's
+            // own track pointer -- the clone only adds frame alignment of the
+            // first buffer, which needs a loaded source anyway and is
+            // unnecessary while the pair is not running yet.
+            // Backport note (2.6): on this branch EngineBuffer::getLoadedTrack()
+            // keeps reporting the *previous* track while a new load is in
+            // flight (2.7 reports the requested track already). A mere
+            // "not null" check would therefore clone the stale previous track
+            // onto the partner; readiness must mean "the engine finished
+            // loading *this* deck's current track". Equivalent on 2.7.
+            const bool leaderEngineReady = leader.pEngineBuffer != nullptr &&
+                    leader.pEngineBuffer->getLoadedTrack() == pLeaderTrack;
+            if (leaderEngineReady) {
+                follower.pDeck->cloneFromChannel(
+                        leader.pDeck->getEngineDeck(),
 #ifdef __STEM__
-                    follower.pEngineBuffer->getStemMask(),
+                        follower.pEngineBuffer->getStemMask(),
 #endif
-                    isPlaying(leader.pPlay.get()));
+                        isPlaying(leader.pPlay.get()));
+            } else {
+                kLoggerDeckPair.debug()
+                        << "Leader" << leader.group
+                        << "is still loading; adopting its track with a plain "
+                           "load instead of a clone PROBE_FALLBACK_RAN";
+#ifdef __STEM__
+                follower.pDeck->slotLoadTrack(pLeaderTrack,
+                        follower.pEngineBuffer->getStemMask(),
+                        isPlaying(leader.pPlay.get()));
+#else
+                follower.pDeck->slotLoadTrack(pLeaderTrack,
+                        isPlaying(leader.pPlay.get()));
+#endif
+            }
         }
     } else if (pFollowerTrack) {
         // An empty leader takes over the follower's track instead of ejecting
-        // it: the pair stays loadable and no loaded track is lost.
+        // it: the pair stays loadable and no loaded track is lost. Same
+        // ready-check as above.
         kLoggerDeckPair.debug() << "Empty leader" << leader.group
                                 << "adopts the track of follower" << follower.group;
-        leader.pDeck->cloneFromChannel(
-                follower.pDeck->getEngineDeck(),
+        // Same ready-check as above: on this branch the engine buffer reports
+        // the previous track while a load is in flight, so readiness must mean
+        // "the engine loaded *this* deck's current track" (backport note).
+        const bool followerEngineReady = follower.pEngineBuffer != nullptr &&
+                follower.pEngineBuffer->getLoadedTrack() == pFollowerTrack;
+        if (followerEngineReady) {
+            leader.pDeck->cloneFromChannel(
+                    follower.pDeck->getEngineDeck(),
 #ifdef __STEM__
-                leader.pEngineBuffer->getStemMask(),
+                    leader.pEngineBuffer->getStemMask(),
 #endif
-                false);
+                    false);
+        } else {
+#ifdef __STEM__
+            leader.pDeck->slotLoadTrack(pFollowerTrack,
+                    leader.pEngineBuffer->getStemMask(),
+                    false);
+#else
+            leader.pDeck->slotLoadTrack(pFollowerTrack, false);
+#endif
+        }
     }
     m_bPropagatingLoad = false;
 
@@ -890,12 +957,20 @@ void DeckPairManager::propagateTrack(Member& target, TrackPointer pTrack) {
     // a propagated load and a propagated eject go through the same tri-state
     // rule and the legacy flag behind it.
     //
-    // A refusal leaves the two members with different tracks for the moment.
-    // Once the transport lock and the play-state mirror are in place it is an
-    // invariant that either both members play or neither does, and the intended
-    // end behaviour is all-or-nothing: the whole pair operation completes on
-    // both decks or is rejected on both. Revisit this here when the pair is
-    // bench-tested at the end of the implementation (see DECK_PAIR_PLAN.md 2).
+    // A refusal cannot simply be skipped. The pair is still locked, and a
+    // locked follower replays the leader's *frame positions* against whatever
+    // track it holds itself: two unrelated tracks at one transport, with
+    // nothing to detect or heal it. The propagation failed because the user's
+    // request ran into a safeguard on the *other* deck, and the user's request
+    // outranks the pair -- so the pair is disbanded instead. Both decks
+    // survive with a coherent track, which is also what keeps the same-track
+    // invariant of 5.7 true for an active pair. Same resolution as the
+    // passthrough interlock (5.8).
+    //
+    // The intended end state remains all-or-nothing (the pair operation
+    // completes on both decks or is refused on both), which needs a pre-load
+    // veto rather than a post-refusal repair: bench item, DECK_PAIR_PLAN.md 2
+    // and 9.7.
     bool playAfterLoad = false;
     if (isPlaying(target.pPlay.get())) {
         switch (loadWhenDeckPlaying(m_pConfig)) {
@@ -906,7 +981,24 @@ void DeckPairManager::propagateTrack(Member& target, TrackPointer pTrack) {
             kLoggerDeckPair.warning()
                     << target.group << "is playing:" << action
                     << " (Preferences > Decks > Load when deck playing)."
-                    << " The pair holds different tracks until it is resolved.";
+                    << " The pair is disbanded so that both decks keep a"
+                    << " coherent track.";
+            // Keyed on a divergence that is real, not on the play state that
+            // raised the refusal: on a locked follower the play CO is a mirror
+            // and the mirror can lag (an engine-side play release reaches it via
+            // an auto connection), so "partner reads as playing" is not by
+            // itself evidence of an inconsistent pair. It does not need to be:
+            // the early return above drops the case where both members already
+            // hold the track being propagated, so reaching this line always
+            // means the source deck moved to a track the partner is being
+            // refused -- which is precisely the two-tracks-at-one-transport
+            // state the disband exists to prevent. Auto DJ loading the next
+            // track as a pair hits the end of the song is that case, and the
+            // pair has genuinely diverged there.
+            Pair* pPair = activePairForDeckIndex(target.deckIndex);
+            if (pPair != nullptr) {
+                disbandPair(*pPair, target.group);
+            }
             return;
         }
         case LoadWhenDeckPlaying::Allow:
@@ -1084,6 +1176,10 @@ void DeckPairManager::buildBridge(
     VERIFY_OR_DEBUG_ASSERT(pair.active) {
         return;
     }
+    // New bridge, new generation: anything still queued from a previous bridge
+    // of this slot is stale by construction, and this happens before the
+    // entries below capture the value.
+    ++pair.bridgeGeneration;
     if (pair.pFollowerSlipEnabled == nullptr) {
         const ConfigKey slipKey(
                 follower.group, QStringLiteral("slip_enabled"));
@@ -1204,20 +1300,22 @@ void DeckPairManager::buildBridge(
             if (relay) {
                 // User commands arrive synchronously on the writing main
                 // thread and reach the leader with zero added latency (3.2).
+                const quint64 generation = pPair->bridgeGeneration;
                 entry->pFollower->connectValueChanged(
                         this,
-                        [this, pPair, pEntry](double value) {
-                            slotBridgeRelay(pPair, pEntry, value);
+                        [this, pPair, pEntry, generation](double value) {
+                            slotBridgeRelay(pPair, pEntry, value, generation);
                         },
                         Qt::DirectConnection);
             } else {
                 // Statuses are display-rate values; engine-originated writes
                 // from the leader are delivered on the main thread with the
                 // default (auto) connection.
+                const quint64 generation = pPair->bridgeGeneration;
                 entry->pLeader->connectValueChanged(
                         this,
-                        [this, pPair, pEntry](double value) {
-                            slotBridgeMirror(pPair, pEntry, value);
+                        [this, pPair, pEntry, generation](double value) {
+                            slotBridgeMirror(pPair, pEntry, value, generation);
                         },
                         Qt::AutoConnection);
             }
@@ -1273,8 +1371,54 @@ void DeckPairManager::clearBridge(Pair& pair) {
     pair.pLeaderSlipEnabled.reset();
 }
 
+void DeckPairManager::checkSameTrackInvariant(const Pair& pair) const {
+    // DECK_PAIR_PLAN.md 5.7: paired members must hold the same track. A
+    // locked follower replays the leader's positions against its own track, so
+    // a divergence is not cosmetic -- it is two different tracks at one
+    // transport. Every load and eject funnels through loadingTrack() and a
+    // refused propagation disbands the pair, so reaching this means a funnel
+    // was missed; debug-assert it and say so loudly, without changing
+    // behaviour in a release build.
+    //
+    // Main thread only. This is reached from the bridge, and the relay side of
+    // the bridge is deliberately *not* main-thread-only: a hardware tempo fader
+    // or hotcue pad delivers its write on the controller engine thread and runs
+    // the relay inline. Reading Deck::getLoadedTrack() there would copy a
+    // plain, non-atomic std::shared_ptr that the main thread assigns during a
+    // load, i.e. the assertion would itself be the race it is looking for. Skip
+    // those calls: a controller write cannot diverge the pair's tracks, and the
+    // main-thread paths that can are still covered.
+    if (QThread::currentThread() != thread()) {
+        return;
+    }
+    if (m_bPropagatingLoad || !pair.active) {
+        return;
+    }
+    const Member* pLeader = memberByIndex(pair.leaderDeckIndex);
+    const Member* pFollower = memberByIndex(pair.followerDeckIndex);
+    if (pLeader == nullptr || pFollower == nullptr ||
+            pLeader->pDeck == nullptr || pFollower->pDeck == nullptr) {
+        return;
+    }
+    const TrackPointer pLeaderTrack = pLeader->pDeck->getLoadedTrack();
+    if (pLeaderTrack == pFollower->pDeck->getLoadedTrack()) {
+        return;
+    }
+    DEBUG_ASSERT(false);
+    kLoggerDeckPair.warning()
+            << "Pair members" << pLeader->group << pFollower->group
+            << "hold different tracks while paired -- a load or eject bypassed "
+               "the pair's load funnel";
+}
+
 void DeckPairManager::slotBridgeRelay(
-        Pair* pPair, BridgeEntry* pEntry, double value) {
+        Pair* pPair, BridgeEntry* pEntry, double value, quint64 generation) {
+    // Stale bridge (disbanded, or re-formed since this callback was wired up,
+    // or a queued delivery outliving the teardown): pEntry may already be
+    // freed, so nothing may be touched before this check.
+    if (!pPair->active || pPair->bridgeGeneration != generation) {
+        return;
+    }
     // Commands only: a CO write seen from inside the audio callback is the
     // follower's own engine machinery (status, replica, indicator updates),
     // never a pair command. Writes from every other thread - the GUI and,
@@ -1286,15 +1430,15 @@ void DeckPairManager::slotBridgeRelay(
     if (m_pEngine != nullptr && m_pEngine->isEngineCallbackThread()) {
         return;
     }
-    if (!pPair->active) {
-        return;
-    }
     // An echo of the bridge's own write on this thread is never a command
     // (BridgeWriteGuard, 9.11 l): this is how the pitch-fader limit cycle of
     // the first bench test happened.
     if (t_bridgeWriteDepth > 0) {
         return;
     }
+    // Paired members hold the same track (5.7). After the filters above, so the
+    // per-hardware-tick path that relays its own echo stays as short as it was.
+    checkSameTrackInvariant(*pPair);
     // Slip disconnects the command bridge: a slipping follower drives its
     // own transport and its commands stay local (R8).
     if (pPair->pFollowerSlipEnabled && pPair->pFollowerSlipEnabled->toBool()) {
@@ -1330,12 +1474,21 @@ void DeckPairManager::slotBridgeRelay(
 }
 
 void DeckPairManager::slotBridgeMirror(
-        Pair* pPair, BridgeEntry* pEntry, double value) {
+        Pair* pPair, BridgeEntry* pEntry, double value, quint64 generation) {
+    // Same staleness rule as slotBridgeRelay, and this is the side that needs
+    // it: the mirror listener is an auto connection, so a leader write from the
+    // engine thread arrives here as a queued invocation carrying raw pointers
+    // that the teardown may have freed in the meantime.
+    if (!pPair->active || pPair->bridgeGeneration != generation) {
+        return;
+    }
     // Delivered on the main thread: same-thread emissions are direct,
     // engine-thread emissions are queued by the auto connection.
     if (!pPair->active) {
         return;
     }
+    // Paired members hold the same track (5.7). Cheap: two pointer compares.
+    checkSameTrackInvariant(*pPair);
     // A slipping follower is not bridged at all: the relay side already
     // refuses follower commands while it slips (R8), and mirror writes must
     // stop too. A mirror is an external CO write, but a slipping follower

@@ -50,6 +50,9 @@ bool EnginePairTransport::consume(PairTransportSnapshot* pSnapshotOut) const {
         }
 
         PairTransportSnapshot snapshot;
+        // The sequence this read is pinned to: a consumer compares it to decide
+        // whether it saw a *new* publication or the same one again.
+        snapshot.sequence = seqBefore;
         snapshot.posStart = m_cell.posStart.load(std::memory_order_relaxed);
         snapshot.posEnd = m_cell.posEnd.load(std::memory_order_relaxed);
         snapshot.rate = m_cell.rate.load(std::memory_order_relaxed);

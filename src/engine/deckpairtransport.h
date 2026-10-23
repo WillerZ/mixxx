@@ -30,6 +30,14 @@ enum class PairRole : quint8 {
 /// padding relocate the read position in the middle of a buffer, so the buffer
 /// end position cannot be integrated from the rate alone.
 struct PairTransportSnapshot {
+    /// The seqlock sequence value this snapshot was read under. Two consumes
+    /// reporting the same value saw the same publication, which is how a
+    /// consumer tells "the publisher has stopped publishing" apart from "the
+    /// pair plane is not moving": the contents cannot tell those apart,
+    /// because a leader wrapping inside a short loop legitimately publishes
+    /// byte-identical positions on every callback while playing at full speed
+    /// (DECK_PAIR_PLAN.md 9.18).
+    quint32 sequence = 0;
     double posStart = 0.0;
     double posEnd = 0.0;
     /// Sample consumption rate applied by the leader.
@@ -40,6 +48,9 @@ struct PairTransportSnapshot {
     bool scratching = false;
     bool reverse = false;
 
+    /// Payload comparison only: `sequence` is transport metadata, not part of
+    /// what was published, so it stays out of ==. Consumers that care about
+    /// freshness compare `sequence` explicitly.
     bool operator==(const PairTransportSnapshot& other) const {
         return posStart == other.posStart && posEnd == other.posEnd &&
                 rate == other.rate && speed == other.speed &&

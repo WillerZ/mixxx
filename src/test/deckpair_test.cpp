@@ -17,15 +17,19 @@
 
 #include <gtest/gtest.h>
 
+#include <QSignalSpy>
 #include <QString>
 #include <QThread>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <random>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
@@ -38,6 +42,7 @@
 #include "mixer/deckpairmanager.h"
 #include "test/deckpairtestbase.h"
 #include "track/beats.h"
+#include "track/cue.h"
 #include "track/track.h"
 
 namespace {
@@ -1653,6 +1658,194 @@ class DeckPairAudioTest : public BaseSignalPathTest {
         EXPECT_EQ(control(kLeader, kPlay), control(kFollower, kPlay));
     }
 
+    /// Deck-vs-deck channel-buffer audio comparator
+    /// (DECK_PAIR_PLAN.md 8: "none exists today; only master-buffer goldens").
+    ///
+    /// Compares what each member of the pair actually mixed out to its own
+    /// channel buffer on the callback that just ran, sample for sample. The
+    /// channel buffer is the output of `EngineDeck::process()`, i.e. decoded
+    /// audio through the real scaler, stem handling, gains and effects -- so
+    /// equality here means the two *independent* data planes produced the same
+    /// stream, which is the audio-level statement of the transport lock
+    /// (T32). Positions being equal (assertPairLocked) does not imply this:
+    /// only the audio proves the readers and scalers followed the pair plane.
+    ///
+    /// \p maxAbsDelta is the tolerated per-sample difference; a locked pair on
+    /// the same source must be far below it, so the default is the plan's 1e-6.
+    void assertMemberAudioEqual(double maxAbsDelta = 1e-6,
+            const char* context = "") {
+        const std::span<const CSAMPLE> leader =
+                m_pEngineMixer->getChannelBuffer(m_sGroup1);
+        const std::span<const CSAMPLE> follower =
+                m_pEngineMixer->getChannelBuffer(m_sGroup3);
+        ASSERT_EQ(leader.size(), follower.size());
+        ASSERT_FALSE(leader.empty());
+        double worst = 0.0;
+        std::size_t worstIndex = 0;
+        for (std::size_t i = 0; i < leader.size(); ++i) {
+            const double delta = std::fabs(double(leader[i]) - double(follower[i]));
+            if (delta > worst) {
+                worst = delta;
+                worstIndex = i;
+            }
+        }
+        EXPECT_LE(worst, maxAbsDelta)
+                << "member channel buffers differ by " << worst
+                << " [" << context << "]\n"
+                << "  leader peak=" << bufferPeak(m_sGroup1)
+                << " follower peak=" << bufferPeak(m_sGroup3)
+                << " at sample " << worstIndex
+                << " (leader " << leader[worstIndex] << ", follower "
+                << follower[worstIndex] << ')';
+    }
+
+    /// Peak absolute sample of a channel buffer (0 when the group has none).
+    double bufferPeak(const QString& group) const {
+        double peak = 0.0;
+        for (const CSAMPLE s : m_pEngineMixer->getChannelBuffer(group)) {
+            peak = std::max(peak, std::fabs(double(s)));
+        }
+        return peak;
+    }
+
+    /// Watches member audio agreement over a run of callbacks and fails only on
+    /// a *sustained* disagreement.
+    ///
+    /// Sample-for-sample equality is the right expectation for a locked pair in
+    /// steady state, but demanding it of every single callback is not testable
+    /// against a real reader: a `CachingReader` miss makes a member emit
+    /// silence and then ramp back in to avoid a pop (DECK_PAIR_PLAN.md 9.3), so
+    /// for a few callbacks after any discontinuity the two members can
+    /// legitimately render scaled-down versions of the same material -- both
+    /// audible, not equal, for a duration that depends on how fast the reader
+    /// thread happens to decode. That is an artefact of the data plane, not of
+    /// the transport, and asserting through it makes the test flaky (it did).
+    ///
+    /// What cannot happen is the pair *staying* out of agreement: that is what
+    /// a follower drifting off the pair plane looks like, and that is what this
+    /// fails on.
+    class MemberAudioWatcher {
+      public:
+        MemberAudioWatcher(DeckPairAudioTest* pTest, int maxRun = 3)
+                : m_pTest(pTest),
+                  m_maxRun(maxRun) {
+        }
+
+        void check(const char* context) {
+            const double leaderPeak = m_pTest->bufferPeak(m_pTest->m_sGroup1);
+            const double followerPeak = m_pTest->bufferPeak(m_pTest->m_sGroup3);
+            const bool audible = leaderPeak > 1e-4 && followerPeak > 1e-4;
+
+            // One member going permanently quiet is not "tolerated", it is the
+            // data plane of that deck dying -- the loudest failure a DJ can get
+            // out of a pair. Without this counter a silently dead follower makes
+            // every later callback look "not audible", the disagreement check
+            // below never runs, and the test goes green on a mute deck.
+            const bool oneSided = (leaderPeak > 1e-4) != (followerPeak > 1e-4);
+            if (oneSided && ++m_silenceRun == kMaxSilenceRun) {
+                ADD_FAILURE() << "one member has been silent for " << m_silenceRun
+                              << " consecutive callbacks [" << context
+                              << "] while the other is audible: a member's data plane "
+                                 "went away (leader peak "
+                              << leaderPeak
+                              << ", follower peak " << followerPeak << ")";
+            }
+            if (!oneSided) {
+                m_silenceRun = 0;
+            }
+
+            const bool agrees = m_pTest->memberAudioDelta() <= 1e-6;
+            if (agrees || !audible) {
+                m_run = 0;
+                return;
+            }
+            if (++m_run == m_maxRun) {
+                ADD_FAILURE() << "the member channel buffers have disagreed for "
+                              << m_run
+                              << " consecutive audible callbacks [" << context
+                              << "]: the follower no longer replays the pair plane";
+            }
+            ++m_disagreements;
+        }
+
+        /// Callbacks that needed the tolerance. Not asserted on: a warning
+        /// worth having when a change makes the data plane worse.
+        int tolerated() const {
+            return m_disagreements;
+        }
+
+        /// Consecutive callbacks in which exactly one member was audible. The
+        /// reader-miss window the tolerance below exists for is silent on the
+        /// member that missed and *usually* resolves well inside this, and both
+        /// members missing at once (the common case at a jump) is not one-sided
+        /// at all.
+        static constexpr int kMaxSilenceRun = 20;
+
+      private:
+        DeckPairAudioTest* m_pTest;
+        int m_maxRun{6};
+        int m_run{0};
+        int m_silenceRun{0};
+        int m_disagreements{0};
+    };
+
+    /// The mirror image of assertMemberAudioEqual for the stem split use case:
+    /// the pair must stay locked in *time* while its members audibly differ,
+    /// because each member mutes/solos a different stem. Silence on one member
+    /// where the other has signal is the expected difference.
+    void assertMemberAudioDiffers(double minAbsDelta) {
+        const std::span<const CSAMPLE> leader =
+                m_pEngineMixer->getChannelBuffer(m_sGroup1);
+        const std::span<const CSAMPLE> follower =
+                m_pEngineMixer->getChannelBuffer(m_sGroup3);
+        ASSERT_EQ(leader.size(), follower.size());
+        ASSERT_FALSE(leader.empty());
+        double worst = 0.0;
+        for (std::size_t i = 0; i < leader.size(); ++i) {
+            worst = std::max(worst,
+                    std::fabs(double(leader[i]) - double(follower[i])));
+        }
+        EXPECT_GE(worst, minAbsDelta)
+                << "the member channel buffers are identical although this "
+                   "test expects them to differ";
+    }
+
+    /// The worst per-sample difference between the member channel buffers of
+    /// the callback that just ran.
+    double memberAudioDelta() const {
+        const std::span<const CSAMPLE> leader =
+                m_pEngineMixer->getChannelBuffer(m_sGroup1);
+        const std::span<const CSAMPLE> follower =
+                m_pEngineMixer->getChannelBuffer(m_sGroup3);
+        EXPECT_EQ(leader.size(), follower.size());
+        double worst = 0.0;
+        for (std::size_t i = 0; i < leader.size(); ++i) {
+            worst = std::max(worst,
+                    std::fabs(double(leader[i]) - double(follower[i])));
+        }
+        return worst;
+    }
+
+    /// Processes callbacks until both members render the same audio again.
+    ///
+    /// A member whose `CachingReader` misses a chunk writes **silence but
+    /// keeps its position** (DECK_PAIR_PLAN.md 9.3; readaheadmanager.cpp
+    /// clears to silence while advancing, and ramps back in to avoid a pop),
+    /// so right after a load or a jump into cold data one member can briefly
+    /// lag in *audio* while remaining exactly locked in *position*. That
+    /// window is bounded (measured: ~3 callbacks at this buffer size); a pair
+    /// that never recovers is a real desync, and this helper fails on it.
+    /// Use it after a discontinuity, never to paper over steady-state drift.
+    bool waitForMemberAudio(int maxCallbacks, double tolerance = 1e-6) {
+        for (int i = 0; i < maxCallbacks; ++i) {
+            if (memberAudioDelta() <= tolerance) {
+                return true;
+            }
+            ProcessBuffer();
+        }
+        return memberAudioDelta() <= tolerance;
+    }
+
     double playPos(int deckIndex) {
         return buffer(deckIndex)->getPlayPos().value();
     }
@@ -1866,6 +2059,352 @@ TEST_F(DeckPairAudioTest, RepeatThroughEndOfTrackStaysLocked) {
     EXPECT_EQ(0.0, control(kLeader, kPlay));
     EXPECT_EQ(0.0, control(kFollower, kPlay));
     assertPairLocked();
+}
+
+// T34: a long locked run. Cheap to run, and it is the only test that says
+// "nothing degrades over a track": 2000 engine callbacks (~6 s of audio) with
+// the transport asserted on every single one, plus a pause/resume cycle -- the
+// recovery path of the transport stall check (9.18) -- and a check that the
+// follower neither drifts off the pair plane nor accumulates work.
+TEST_F(DeckPairEngineTest, LockedPairSurvivesALongRun) {
+    startLockedPair();
+
+    double maxPosError = 0.0;
+    for (int i = 0; i < 2000; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+        maxPosError = std::max(maxPosError,
+                fabs(control(kLeader, QStringLiteral("playposition")) -
+                        control(kFollower, QStringLiteral("playposition"))));
+    }
+    EXPECT_EQ(0.0, maxPosError)
+            << "the follower drifted off the pair plane over a long run";
+
+    // Pause and resume: the leader stops publishing a moving plane, and the
+    // follower must hold, then follow again. Both directions matter -- the
+    // stall check in EngineBuffer::processBuffer treats a leader that stopped
+    // publishing exactly like a paused one.
+    setPlaying(kLeader, false);
+    for (int i = 0; i < 50; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    const double positionWhilePaused =
+            control(kLeader, QStringLiteral("playposition"));
+    EXPECT_EQ(positionWhilePaused, control(kFollower, QStringLiteral("playposition")));
+    for (int i = 0; i < 50; ++i) {
+        ProcessBuffer();
+        EXPECT_DOUBLE_EQ(positionWhilePaused,
+                control(kFollower, QStringLiteral("playposition")))
+                << "the follower moved on its own at callback " << i
+                << " while the pair was paused";
+    }
+
+    setPlaying(kLeader, true);
+    for (int i = 0; i < 500; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    EXPECT_GT(control(kLeader, QStringLiteral("playposition")),
+            positionWhilePaused)
+            << "the pair did not resume";
+    EXPECT_EQ(control(kLeader, QStringLiteral("playposition")),
+            control(kFollower, QStringLiteral("playposition")));
+}
+
+// T36: unpair and pair again, and swap the roles, without the state of the
+// previous pair leaking into the next one. Formation and teardown are the two
+// paths the gesture tests cover least, and a pair formed straight after another
+// one is where a stale transport, a stale mirror or a half-torn-down bridge
+// shows up.
+//
+// Note what the manager deliberately refuses in between (R5): a pair cannot be
+// formed onto a partner that is audible, and disbanding leaves both members
+// playing. So "press pair again right away" is refused until one deck is
+// stopped -- asserted below, because it is exactly the kind of thing a DJ runs
+// into on the rig and should not change by accident.
+TEST_F(DeckPairEngineTest, RePairingAndSwappingRolesStaysClean) {
+    startLockedPair();
+    for (int i = 0; i < 20; ++i) {
+        ProcessBuffer();
+    }
+
+    for (int round = 0; round < 3; ++round) {
+        setControl(kLeader, QStringLiteral("pair_enabled"), 0.0);
+        ProcessBuffer();
+        ASSERT_EQ(0.0, control(kLeader, QStringLiteral("pair_enabled")));
+        ASSERT_EQ(PairRole::Unpaired, buffer(kLeader)->pairRole())
+                << "round " << round;
+        ASSERT_EQ(PairRole::Unpaired, buffer(kFollower)->pairRole())
+                << "round " << round;
+
+        // Both members are still playing: the partner is audible, so forming a
+        // new pair is refused rather than hijacking its transport.
+        setControl(kLeader, QStringLiteral("pair_enabled"), 1.0);
+        ProcessBuffer();
+        ASSERT_EQ(0.0, control(kLeader, QStringLiteral("pair_enabled")))
+                << "round " << round
+                << ": pairing onto an audible partner must be refused";
+
+        // Stop the partner, then the very same write forms the pair again.
+        setControl(kFollower, QStringLiteral("play"), 0.0);
+        ProcessBuffer();
+        setControl(kLeader, QStringLiteral("pair_enabled"), 1.0);
+        ProcessBuffer();
+        ASSERT_EQ(1.0, control(kLeader, QStringLiteral("pair_enabled")))
+                << "re-pair round " << round << " was refused";
+        ASSERT_TRUE(waitForEngineTrack(kFollower, deck(kLeader)->getLoadedTrack()));
+        ASSERT_EQ(PairRole::PairLeader, buffer(kLeader)->pairRole())
+                << "round " << round;
+        ASSERT_EQ(PairRole::PairFollower, buffer(kFollower)->pairRole())
+                << "round " << round;
+
+        setPlaying(kLeader, true);
+        for (int i = 0; i < 20; ++i) {
+            ProcessBuffer();
+            assertPairLocked();
+        }
+        // The re-formed pair is a working transport, not a restored shell.
+        EXPECT_GT(control(kLeader, QStringLiteral("playposition")), 0.0)
+                << "round " << round << ": the re-formed pair is not advancing";
+    }
+
+    // Swap the roles: pair from the other deck, which then becomes the leader.
+    // While a pair is active a write on the partner is a no-op ("already
+    // paired"), so swapping means disband, stop the future follower, re-form.
+    setControl(kLeader, QStringLiteral("pair_enabled"), 0.0);
+    ProcessBuffer();
+    setControl(kLeader, QStringLiteral("play"), 0.0);
+    ProcessBuffer();
+    setControl(kFollower, QStringLiteral("pair_enabled"), 1.0);
+    ProcessBuffer();
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("pair_enabled")));
+    ASSERT_EQ(PairRole::PairLeader, buffer(kFollower)->pairRole())
+            << "the deck the pair_enabled write landed on must be the leader";
+    ASSERT_EQ(PairRole::PairFollower, buffer(kLeader)->pairRole());
+    ASSERT_TRUE(waitForEngineTrack(kLeader, deck(kFollower)->getLoadedTrack()));
+
+    setPlaying(kFollower, true);
+    for (int i = 0; i < 5; ++i) {
+        ProcessBuffer();
+    }
+    const double positionAfterSwap =
+            control(kFollower, QStringLiteral("playposition"));
+    for (int i = 0; i < 200; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+    }
+    EXPECT_GT(control(kFollower, QStringLiteral("playposition")),
+            positionAfterSwap)
+            << "the transport stopped after the role swap";
+    EXPECT_EQ(control(kLeader, QStringLiteral("playposition")),
+            control(kFollower, QStringLiteral("playposition")));
+}
+
+// T33: the shared Track keeps exactly one temp loop cue, and the same Cue
+// object across loop changes.
+//
+// Both members of a pair hold the *same* Track object, and the temp loop cue
+// (the non-hot "loop" region Mixxx stores on the track) is written by
+// LoopingControl::updateLoopCue(), which is a check-then-act on the shared cue
+// list: it removes the loop cue when handed a region it considers torn and
+// appends a *new* Cue when it finds none. The Phase 5 shared-metadata audit
+// predicted that the locked follower, fed the region as two separate mirror
+// writes, would hit exactly that and destroy the leader's cue -- a lost loop
+// cue, a fresh DbId and any colour/label gone, three shared-Track mutations
+// where an unpaired deck makes one -- and proposed an isPairLockedFollower()
+// gate in updateLoopCue().
+//
+// That gate was implemented and then removed again: measured against this
+// build it fixes nothing. With and without it the pair produces one loop cue
+// with a stable Cue identity and a single cuesUpdated burst per gesture, for
+// gestures issued on either member, because the follower's own LoopInfo is not
+// stale -- the relayed gesture runs on it as well and the mirror writes land in
+// the same callback. Adding a suppression that hides a whole writer on the
+// shared Track without a demonstrated fault is a worse bet than this test, so
+// what stays is the test: it pins the invariant the audit was worried about,
+// and it fails (via cue identity above all) if a future change really does
+// make the follower churn the leader's cue. See DECK_PAIR_PLAN.md 9.18.
+TEST_F(DeckPairAudioTest, LoopCueOnTheSharedTrackIsWrittenOnlyByTheLeader) {
+    // The pair's track is the leader's, so deck 1 and deck 3 hold one Track.
+    expectPaired();
+    ASSERT_TRUE(waitForEngineTrack(kFollower, m_pTrackA));
+    ASSERT_EQ(m_pTrackA, deck(kFollower)->getLoadedTrack());
+    setPlaying(kLeader, true);
+    ProcessBuffer();
+
+    const auto loopCues = [this]() {
+        QList<CuePointer> result;
+        for (const CuePointer& pCue : m_pTrackA->getCuePoints()) {
+            if (pCue->getType() == mixxx::CueType::Loop &&
+                    pCue->getHotCue() == Cue::kNoHotCue) {
+                result.append(pCue);
+            }
+        }
+        return result;
+    };
+    ASSERT_TRUE(loopCues().isEmpty())
+            << "the fixture track must start without a temp loop cue";
+
+    // Engaging a loop from the follower: the command is relayed to the leader,
+    // so the leader is the member that must have written the shared Track.
+    QSignalSpy cuesChanged(m_pTrackA.get(), &Track::cuesUpdated);
+    setControl(kFollower, QStringLiteral("beatloop_size"), 4.0);
+    pulse(kFollower, QStringLiteral("beatloop_4_activate"));
+    for (int i = 0;
+            i < 600 && control(kLeader, QStringLiteral("loop_enabled")) != 1.0;
+            ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    for (int i = 0; i < 4; ++i) {
+        ProcessBuffer();
+    }
+
+    const QList<CuePointer> afterEngage = loopCues();
+    ASSERT_EQ(1, afterEngage.size())
+            << "the shared Track must hold exactly one temp loop cue: not one "
+               "per member, and not a removed-and-recreated pair";
+    // One gesture, one mutation: an unpaired deck writes the cue once, and the
+    // gated follower adds nothing (the ungated follower measured three).
+    EXPECT_EQ(1, cuesChanged.count())
+            << "a single paired loop gesture must rewrite the shared Track "
+               "exactly once, saw "
+            << cuesChanged.count();
+    // And what landed is a usable region, i.e. the leader's own write rather
+    // than a half-written mirror of it.
+    const Cue::StartAndEndPositions cueRegion =
+            afterEngage.first()->getStartAndEndPosition();
+    EXPECT_TRUE(cueRegion.startPosition.isValid() &&
+            cueRegion.endPosition.isValid() &&
+            cueRegion.endPosition > cueRegion.startPosition)
+            << "the one loop cue on the shared Track is not a usable region";
+
+    // Changing the loop must *update* that cue, not replace it: cue identity
+    // (and with it the library DbId, colour and label) is preserved.
+    const CuePointer pOriginalCue = afterEngage.first();
+    cuesChanged.clear();
+    setControl(kFollower, QStringLiteral("beatloop_size"), 8.0);
+    pulse(kFollower, QStringLiteral("beatloop_8_activate"));
+    bool resized = false;
+    for (int i = 0; i < 600 && !resized; ++i) {
+        ProcessBuffer();
+        const QList<CuePointer> cues = loopCues();
+        resized = cues.size() == 1 &&
+                cues.first()->getStartAndEndPosition().endPosition !=
+                        cueRegion.endPosition;
+    }
+    const QList<CuePointer> afterResize = loopCues();
+    ASSERT_EQ(1, afterResize.size());
+    EXPECT_TRUE(resized) << "the loop cue was never updated by the resize";
+    EXPECT_EQ(pOriginalCue, afterResize.first())
+            << "the loop cue was removed and recreated instead of updated";
+    EXPECT_EQ(1, cuesChanged.count())
+            << "a single paired loop resize must rewrite the shared Track "
+               "exactly once, saw "
+            << cuesChanged.count();
+}
+
+// T32: the audio-level statement of the transport lock (DECK_PAIR_PLAN.md 8,
+// T32). Runs on real scalers with a real sine file: what each member mixes out
+// to its own channel buffer must be the same stream, because both members are
+// one deck -- the moment where two independent readers and scalers would drift
+// apart if the follower ever used its own transport. Deck-vs-deck comparator:
+// the plan notes none existed before (only master-buffer goldens), so this
+// uses the new helper above.
+//
+// Two kinds of assertion, deliberately. *Position* is asserted strictly on
+// every callback: the pair plane is exact by construction, so anything else is
+// a bug. *Audio* is watched for sustained disagreement (MemberAudioWatcher),
+// because a real reader legitimately interrupts its own stream on a cache miss
+// and ramps back in (9.3), and the length of that window is a property of
+// decode timing, not of the pair.
+TEST_F(DeckPairAudioTest, MembersRenderTheSameAudioThroughRealScalers) {
+    expectPaired();
+    ASSERT_TRUE(waitForEngineTrack(kFollower, m_pTrackA));
+    setPlaying(kLeader, true);
+    assertPairLocked();
+
+    // Cold start: the follower's reader has to fill its chunk cache before it
+    // renders anything (silence-but-keep-position, 9.3), so the audio -- never
+    // the position -- converges a few callbacks late.
+    ASSERT_TRUE(waitForMemberAudio(200))
+            << "the follower never caught up with the leader's audio";
+    double signal = 0.0;
+    for (const CSAMPLE s : m_pEngineMixer->getChannelBuffer(m_sGroup1)) {
+        signal = std::max(signal, std::fabs(double(s)));
+    }
+    ASSERT_GT(signal, 1e-4) << "the pair is not actually producing audio";
+
+    // Steady state: bit-identical, and it must stay that way.
+    assertMemberAudioEqual();
+    MemberAudioWatcher audio(this);
+    for (int i = 0; i < 60; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+        audio.check("steady state");
+    }
+
+    // Mid-run pitch change from the follower: the pair's rate changes for both,
+    // and the two independent real scalers must keep producing the same
+    // stream. A rate move does not put either reader on cold data, so this is
+    // also checked strictly.
+    setControl(kFollower, kRate, 1.1);
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_TRUE(waitForMemberAudio(200))
+            << "the members did not agree again after the pitch change";
+    for (int i = 0; i < 40; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+        audio.check("after the pitch change");
+    }
+    EXPECT_EQ(ControlObject::get(ConfigKey(m_sGroup1, kRate)),
+            ControlObject::get(ConfigKey(m_sGroup3, kRate)));
+
+    // A jump into cold data is the hardest transient: both readers must
+    // re-anchor onto the same pair position. Position on the very next
+    // callback, audio once both readers are serving the new region again.
+    setControl(kFollower, QStringLiteral("playposition"), 0.3);
+    ProcessBuffer();
+    assertPairLocked();
+    EXPECT_TRUE(waitForMemberAudio(200))
+            << "the members did not agree again after the jump";
+    for (int i = 0; i < 40; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+        audio.check("after the jump");
+    }
+
+    // A loop engages on both members at once and stays identical.
+    setControl(kFollower, QStringLiteral("beatloop_size"), 4.0);
+    setControl(kFollower, QStringLiteral("beatloop_4_activate"), 1.0);
+    setControl(kFollower, QStringLiteral("beatloop_4_activate"), 0.0);
+    for (int i = 0;
+            i < 4 && control(kFollower, QStringLiteral("loop_enabled")) != 1.0;
+            ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    for (int i = 0; i < 40; ++i) {
+        ProcessBuffer();
+        assertPairLocked();
+        audio.check("inside the loop");
+    }
+    qDebug() << "T32: reader-window callbacks tolerated:" << audio.tolerated();
+
+    // Control for the comparator itself: a mixer-strip difference must make the
+    // very same comparison fail, so the passes above are not comparing two
+    // stale or empty spans. Pregain is never shared (R9) and is applied inside
+    // EngineDeck::process(), i.e. inside the compared buffer -- and a
+    // transport-neutral change like this must not disturb the lock. (A seek
+    // would be useless as a control here: on a pair the leader's seek *is* the
+    // pair plane, so both members move together by design.)
+    setControl(kLeader, QStringLiteral("pregain"), 0.5);
+    ProcessBuffer();
+    assertPairLocked();
+    assertMemberAudioDiffers(1e-3);
 }
 
 // ---------------------------------------------------------------------------

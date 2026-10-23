@@ -637,6 +637,32 @@ TEST_F(AutoDJProcessorTest, Decks34PlayingWarning) {
     EXPECT_EQ(AutoDJProcessor::ADJ_UNUSED_DECK_PLAYING, err);
 }
 
+// Deck pairs: a paired partner of a bound deck is the same deck (R7), so it
+// must not count as an "unused deck playing" and lock Auto DJ out. Without the
+// interlock, pairing decks 1+3, playing the pair, and pressing Auto DJ does
+// nothing but flash an error the DJ cannot act on -- the partner cannot be
+// stopped without stopping the pair.
+TEST_F(AutoDJProcessorTest, PairedPartnerIsNotAnUnusedDeck) {
+    // Decks 1+2 are the bound left/right pair; decks 1+3 are paired.
+    ControlObject pairEnabled1(ConfigKey("[Channel1]", "pair_enabled"));
+    ControlObject pairEnabled3(ConfigKey("[Channel3]", "pair_enabled"));
+    pairEnabled1.set(1.0);
+    pairEnabled3.set(1.0);
+
+    // The pair plays on the bound left deck; the partner mirrors it.
+    deck1.play.set(1);
+    deck3.play.set(1);
+    EXPECT_EQ(AutoDJProcessor::ADJ_QUEUE_EMPTY, pProcessor->toggleAutoDJ(true))
+            << "Auto DJ was refused although only the bound deck is playing";
+
+    // The same deck 3 playing while *unpaired* is still the refusal it always
+    // was: an unrelated deck must keep Auto DJ off.
+    pairEnabled3.set(0.0);
+    pairEnabled1.set(0.0);
+    EXPECT_EQ(AutoDJProcessor::ADJ_UNUSED_DECK_PLAYING,
+            pProcessor->toggleAutoDJ(true));
+}
+
 TEST_F(AutoDJProcessorTest, QueueEmpty) {
     AutoDJProcessor::AutoDJError err = pProcessor->toggleAutoDJ(true);
     EXPECT_EQ(AutoDJProcessor::ADJ_QUEUE_EMPTY, err);

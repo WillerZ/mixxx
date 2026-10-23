@@ -255,6 +255,16 @@ ControlPickerMenu::ControlPickerMenu(QWidget* pParent)
             tr("Slip Mode"),
             tr("Toggle slip mode"),
             pTransportMenu);
+    addDeckControl("pair_enabled",
+            tr("Deck Pair"),
+            tr("Toggle the deck pair: this deck and its partner deck (1+3 or "
+               "2+4) act as one deck with one shared transport, while each "
+               "keeps its own audio channel, gain, EQ and stem settings.<br>"
+               "The deck where the pair is switched on becomes the pair leader; "
+               "its track is the pair's track.<br>"
+               "Slip mode, loop rolls and reverse roll always stay "
+               "deck-specific."),
+            pTransportMenu);
 
     // BPM / Beatgrid
     QMenu* pBpmMenu = addSubmenu(tr("BPM / Beatgrid"));

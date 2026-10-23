@@ -15,7 +15,13 @@
 
 #include <gtest/gtest.h>
 
+#include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QString>
+#include <QThread>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 #include "control/controlobject.h"
 #include "engine/deckpairtransport.h"
@@ -77,6 +83,40 @@ class DeckPairManagerTest : public DeckPairTestBase {
         ProcessBuffer();
         ASSERT_EQ(1.0, control(followerIndex, QStringLiteral("play")));
         ASSERT_EQ(0.0, control(leaderIndex, QStringLiteral("play")));
+    }
+
+    /// Re-forms a pair that a refused propagation has disbanded, and leaves it
+    /// as the previous case left it: follower playing locally.
+    ///
+    /// A refused propagation disbands (DeckPairManager::propagateTrack,
+    /// DECK_PAIR_PLAN.md 5.7): a locked follower replays the leader's frame
+    /// positions against whatever track it holds itself, so a pair whose
+    /// members hold different tracks is not a degraded pair -- it is two
+    /// unrelated tracks at one transport, with nothing to detect or heal it.
+    void reFormPairWithPlayingFollower(int leaderIndex, int followerIndex) {
+        setControl(followerIndex, QStringLiteral("slip_enabled"), 0.0);
+        ProcessBuffer();
+        setControl(followerIndex, QStringLiteral("play"), 0.0);
+        setControl(leaderIndex, QStringLiteral("play"), 0.0);
+        ProcessBuffer();
+        ASSERT_FALSE(m_pPairManager->isPaired(group(leaderIndex)));
+        // Let a loaded leader settle before re-pairing: formation adopts the
+        // leader's track, and a settled leader is what a DJ actually presents
+        // (unpair, then pair again a moment later). An empty leader instead
+        // adopts the *follower's* track (5.7), so there is nothing to settle.
+        const TrackPointer pLeaderTrack = deck(leaderIndex)->getLoadedTrack();
+        if (pLeaderTrack) {
+            ASSERT_TRUE(waitForEngineTrack(leaderIndex, pLeaderTrack));
+        }
+        expectPaired(leaderIndex);
+        // Formation adopts a track on whichever member was empty, so both end
+        // up on the same one.
+        const TrackPointer pPairTrack = deck(leaderIndex)->getLoadedTrack();
+        ASSERT_TRUE(pPairTrack) << "the pair holds no track after formation";
+        ASSERT_TRUE(waitForEngineTrack(followerIndex, pPairTrack));
+        ASSERT_EQ(pPairTrack, deck(followerIndex)->getLoadedTrack())
+                << "the pair members must hold the same track after formation";
+        makeFollowerPlayLocally(leaderIndex, followerIndex);
     }
 };
 
@@ -269,18 +309,21 @@ TEST_F(DeckPairManagerTest, PropagatedLoadHonoursLoadWhenDeckPlaying) {
     makeFollowerPlayLocally(0, 2);
     ASSERT_EQ(1.0, control(2, QStringLiteral("play")));
 
-    // Reject: the partner keeps both its track and its playback.
+    // Reject: the partner keeps both its track and its playback, and the pair
+    // is disbanded rather than left locked across two different tracks. The
+    // DJ's own load wins over the pair; both decks stay coherent.
     config()->setValue(kConfigKeyLoadWhenDeckPlaying,
             static_cast<int>(LoadWhenDeckPlaying::Reject));
     loadOnDeck(0, m_pTrackC);
     EXPECT_EQ(m_pTrackC, deck(0)->getLoadedTrack());
     EXPECT_NE(m_pTrackC, deck(2)->getLoadedTrack());
     EXPECT_EQ(1.0, control(2, QStringLiteral("play")));
-    // Refusing the propagation does not break the pair.
-    EXPECT_EQ(1.0, pairEnabled(0));
-    EXPECT_TRUE(m_pPairManager->isPaired(group(0)));
+    EXPECT_EQ(0.0, pairEnabled(0));
+    EXPECT_EQ(0.0, pairEnabled(2));
+    EXPECT_FALSE(m_pPairManager->isPaired(group(0)));
 
     // Allow: the partner loads and goes on playing the new track.
+    reFormPairWithPlayingFollower(0, 2);
     config()->setValue(kConfigKeyLoadWhenDeckPlaying,
             static_cast<int>(LoadWhenDeckPlaying::Allow));
     loadOnDeck(0, m_pTrackB);
@@ -314,16 +357,19 @@ TEST_F(DeckPairManagerTest, EjectHonoursLoadWhenDeckPlaying) {
     makeFollowerPlayLocally(0, 2);
     ASSERT_EQ(1.0, control(2, QStringLiteral("play")));
 
-    // Reject: the stopped member is ejected, the playing partner is left alone.
+    // Reject: the stopped member is ejected, the playing partner is left
+    // alone, and the pair is disbanded instead of being kept locked across a
+    // loaded and an empty deck.
     config()->setValue(kConfigKeyLoadWhenDeckPlaying,
             static_cast<int>(LoadWhenDeckPlaying::Reject));
     deck(0)->slotEjectTrack(1.0);
     EXPECT_EQ(nullptr, deck(0)->getLoadedTrack());
     ASSERT_TRUE(deck(2)->getLoadedTrack());
     EXPECT_EQ(1.0, control(2, QStringLiteral("play")));
-    EXPECT_EQ(1.0, pairEnabled(0));
+    EXPECT_FALSE(m_pPairManager->isPaired(group(0)));
 
     // Allow: ejecting the pair clears the playing partner as well, stopping it.
+    reFormPairWithPlayingFollower(0, 2);
     config()->setValue(kConfigKeyLoadWhenDeckPlaying,
             static_cast<int>(LoadWhenDeckPlaying::Allow));
     // The partner is still playing (and the leader is empty). A pair load
@@ -437,6 +483,99 @@ TEST_F(DeckPairManagerTest, PassthroughDisbandsThePair) {
     EXPECT_EQ(0.0, pairEnabled(0));
     EXPECT_FALSE(m_pPairManager->isPaired(group(0)));
     setControl(2, QStringLiteral("passthrough"), 0.0);
+
+    // The leader is the dangerous member: with passthrough on the deck that
+    // owns the shared transport, the follower would keep replaying a transport
+    // whose audio is muted to the crossfader by the input. Disband, don't
+    // degrade.
+    requestPair(0);
+    ASSERT_TRUE(m_pPairManager->isPaired(group(0)));
+    forceInputConfigured(0);
+    setControl(0, QStringLiteral("passthrough"), 1.0);
+    EXPECT_EQ(1.0, control(0, QStringLiteral("passthrough")));
+    EXPECT_FALSE(m_pPairManager->isPaired(group(0)));
+    EXPECT_EQ(PairRole::Unpaired, buffer(0)->pairRole());
+    EXPECT_EQ(PairRole::Unpaired, buffer(2)->pairRole());
+}
+
+// Hardening (Phase 5): passthrough and pair_enabled may be written from a
+// controller thread -- that is what vinyl control and MIDI mappings do. Both
+// handlers form or disband a pair, which creates and destroys the members'
+// ControlProxies and rewires the bridge; none of that may run on the writing
+// thread. The listeners therefore use AutoConnection (DECK_PAIR_PLAN.md 9.18),
+// which keeps a same-thread write synchronous and defers a foreign one.
+TEST_F(DeckPairManagerTest, PassthroughFromAnotherThreadDisbandsSafely) {
+    registerDecks(4);
+    expectPaired(0);
+    forceInputConfigured(2);
+
+    QThread* pMainThread = QThread::currentThread();
+    std::atomic_bool written{false};
+
+    // A real controller thread writes the control: ControlObject::set() from a
+    // foreign thread is exactly the situation the connection type decides.
+    std::thread writer([this, pMainThread, &written] {
+        ControlObject* pPassthrough = ControlObject::getControl(
+                ConfigKey(group(2), QStringLiteral("passthrough")));
+        if (pPassthrough != nullptr) {
+            pPassthrough->set(1.0);
+        }
+        written.store(QThread::currentThread() != pMainThread &&
+                pPassthrough != nullptr);
+    });
+    writer.join();
+    ASSERT_TRUE(written.load()) << "the writer thread never ran the write";
+
+    // The write happened on another thread, so the pair is still intact -- it
+    // has not been taken apart on a controller thread.
+    EXPECT_TRUE(m_pPairManager->isPaired(group(0)))
+            << "a controller-thread write tore the pair down on its own thread";
+
+    // Deliver it: the disband runs on the manager's thread.
+    QCoreApplication::processEvents();
+    EXPECT_FALSE(m_pPairManager->isPaired(group(0)));
+    EXPECT_EQ(0.0, pairEnabled(0));
+    EXPECT_EQ(PairRole::Unpaired, buffer(0)->pairRole());
+    EXPECT_EQ(1.0, control(2, QStringLiteral("passthrough")));
+}
+
+// Formation adoption must not depend on the leader's *engine* load having
+// finished. cloneFromChannel() takes the track from the source's engine buffer
+// and returns silently while a load is in flight there, which used to leave a
+// freshly formed pair locked across two different tracks -- the state Phase 5
+// calls the one thing a pair must never be. SynchronizeTracks() now falls back
+// to a plain load of the leader's deck-level track; this is the case that
+// reaches that branch (no settle wait anywhere), and the point of it is the
+// same-track assertion, not the timing.
+TEST_F(DeckPairManagerTest, FormingWhileTheLeaderIsStillLoadingStillAdopts) {
+    registerDecks(4);
+    // Put the leader on a track it has not finished loading yet: the deck-level
+    // pointer is set straight away, the engine buffer follows later.
+    loadOnDeck(0, m_pTrackC);
+    ASSERT_EQ(m_pTrackC, deck(0)->getLoadedTrack());
+
+    // Pair immediately: no ProcessBuffer, no waiting for the engine.
+    setControl(0, QStringLiteral("pair_enabled"), 1.0);
+    EXPECT_TRUE(m_pPairManager->isPaired(group(0))) << "PROBE not paired";
+    EXPECT_TRUE(m_pTrackC == deck(0)->getLoadedTrack()) << "PROBE leader deck track";
+    // Backport note (2.6): on this branch EngineBuffer::getLoadedTrack() keeps
+    // reporting the *previously* loaded track until the async load completes
+    // (2.7 reports the requested track synchronously, which is what the
+    // original assertion pinned). The engine may still hold the old track at
+    // this point; that is the mid-load state this test exists to construct.
+    // The adoption itself is pinned by the follower assertions below, and the
+    // engine-side convergence by waitForEngineTrack() at the end.
+    EXPECT_TRUE(buffer(0)->isTrackLoaded()) << "PROBE leader engine not Ready";
+    EXPECT_TRUE(m_pTrackC == deck(2)->getLoadedTrack())
+            << "PROBE follower deck track right after pairing";
+    ProcessBuffer();
+    EXPECT_TRUE(m_pTrackC == deck(2)->getLoadedTrack())
+            << "PROBE follower deck track after one callback";
+
+    // And it is not just a deck-level coincidence: the engine converges on the
+    // same track for both members.
+    EXPECT_TRUE(waitForEngineTrack(0, m_pTrackC));
+    EXPECT_TRUE(waitForEngineTrack(2, m_pTrackC));
 }
 
 // T35: pairing an empty leader adopts the follower's track instead of
