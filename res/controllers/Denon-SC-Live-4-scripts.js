@@ -2154,7 +2154,7 @@ SCLive4.stemsMode = function(deck, offset) {
 };
 SCLive4.stemsMode.prototype = Object.create(components.ComponentContainer.prototype);
 
-// PITCH PLAY MODE (not mapped)
+// PITCH PLAY MODE
 //   - Pads play the last hot cue you used (Mixxx's "hotcue_focus", default 1)
 //     at 8 different pitches. Pressing a pad jumps to that cue and plays it.
 //   - Default range: -4 ... +3 semitones; the root (0, original key) is pad 5
@@ -2776,13 +2776,43 @@ SCLive4.faderEcho = {
     },
 };
 
-// Master gain goes through the script because the unity gain marker is not in the center of the pot.
+// These gains goes through the script because the unity gain marker is not in the center of the pot.
 SCLive4.masterGain = new components.Pot({
     group: "[Master]",
     inKey: "gain",
     softTakeover: false,
     inValueScale: offsetPotInValueScale,
 });
+
+SCLive4.boothGain = new components.Pot({
+    group: "[Master]",
+    inKey: "booth_gain",
+    softTakeover: false,
+    inValueScale: offsetPotInValueScale,
+});
+
+SCLive4.mic1Volume = new components.Pot({
+    group: "[Microphone]",
+    inKey: "pregain",
+    softTakeover: false,
+    inValueScale: offsetPotInValueScale,
+});
+
+if (engine.getValue("[Microphone2]", "input_configured")) {
+    SCLive4.mic2Volume = new components.Pot({
+        group: "[Microphone2]",
+        inKey: "pregain",
+        softTakeover: false,
+        inValueScale: offsetPotInValueScale,
+    });
+} else {
+    SCLive4.mic2Volume = new components.Pot({
+        group: "[Auxiliary1]",
+        inKey: "pregain",
+        softTakeover: false,
+        inValueScale: offsetPotInValueScale,
+    });
+}
 
 // Crossfader: goes through the script so Fader Echo can react to it.
 SCLive4.crossfader = new components.Pot({

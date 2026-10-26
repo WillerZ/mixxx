@@ -149,7 +149,28 @@
                     <Script-Binding/>
                 </options>
             </control>
-            <!-- Headphones level knob (0xBF 0x13): not mapped. In testing, the unit appears to apply it to its own headphone output, so mapping it to Mixxx's headGain would turn the headphones down twice. The Main knob appears to only send MIDI, so it is mapped above. -->
+            <control>
+                <!-- Headphone Gain Knob -->
+                <group>[Master]</group>
+                <key>headGain</key>
+                <description>SC Live 4 headphone volume knob (0xBF 0x13, captured).</description>
+                <status>0xBF</status>
+                <midino>0x13</midino>
+                <options>
+                    <normal/>
+                </options>
+            </control>
+            <control>
+                <!-- Booth Gain Knob (through the script to correct where unity gain is) -->
+                <group>[Master]</group>
+                <key>SCLive4.boothGain.input</key>
+                <description>SC Live 4 booth volume knob (0xBF 0x0f, captured).</description>
+                <status>0xBF</status>
+                <midino>0x0f</midino>
+                <options>
+                    <Script-Binding/>
+                </options>
+            </control>
             <!-- MIDDLE MIXER SECTION -->
             <control>
                 <!-- Library Scroll Encoder -->
@@ -2331,7 +2352,28 @@
                     <Script-Binding/>
                 </options>
             </control>
-            <!-- Mic 1 and Aux/Mic 2 level knobs (0xBF 0x10, 0xBF 0x11): not mapped. In testing, the unit appears to apply them before its outputs and before the signal reaches the computer, so mapping them to Mixxx's mic gain would apply them twice. -->
+            <control>
+                <!-- Mic1 Gain Knob (through the script to correct where unity gain is) -->
+                <group>[Microphone]</group>
+                <key>SCLive4.mic1Volume.input</key>
+                <description>SC Live 4 mic1 volume knob (0xBF 0x10, captured).</description>
+                <status>0xBF</status>
+                <midino>0x10</midino>
+                <options>
+                    <Script-Binding/>
+                </options>
+            </control>
+            <control>
+                <!-- Mic2 Gain Knob (through the script to correct where unity gain is) -->
+                <group>[Microphone2]</group>
+                <key>SCLive4.mic2Volume.input</key>
+                <description>SC Live 4 mic2 volume knob (0xBF 0x11, captured).</description>
+                <status>0xBF</status>
+                <midino>0x11</midino>
+                <options>
+                    <Script-Binding/>
+                </options>
+            </control>
             <!-- MENU Button: effects panel, SHIFT = microphone panel -->
             <control>
                 <group>[Master]</group>
