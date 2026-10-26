@@ -2112,9 +2112,13 @@ SCLive4.stemsMode = function(deck, offset) {
     this.ledControl = SCLive4.padMode.HOTCUE;
     this.colorUnMute = SCLive4.rgbCode.blue;
     this.colorMute = SCLive4.rgbCode.blueDark;
+    this.color2UnMute = SCLive4.rgbCode.orange;
+    this.color2Mute = SCLive4.rgbCode.orangeDark;
     this.colorDisabled = SCLive4.rgbCode.black;
     this.pads = new components.ComponentContainer();
     this.groupPrefix = `[Channel${script.deckFromGroup(deck.currentDeck)}_Stem`;
+    this.group2Prefix = `[Channel${1 + (script.deckFromGroup(deck.currentDeck) + 1) % 4}_Stem`;
+    this.paired = engine.getValue(deck.currentDeck, "pair_enabled");
     for (let i = 1; i <= 4; i++) {
         this.pads[i] = new components.Button({
             type: components.Button.prototype.types.powerWindow,
@@ -2128,15 +2132,57 @@ SCLive4.stemsMode = function(deck, offset) {
             off: this.colorUnMute,
             outConnect: false,
         });
+        if (this.paired) {
+            this.pads[i+4] = new components.Button({
+                type: components.Button.prototype.types.powerWindow,
+                group: `${this.group2Prefix}${5 - i}]`,
+                key: "mute",
+                midi: [0x94 + offset, 0x0E + i],
+                sendRGB: function(colorObj) {
+                    midi.sendShortMsg(0x94 + offset, 0x0E + i, SCLive4.paletteFromRGB(colorObj));
+                },
+                on: this.color2Mute,
+                off: this.color2UnMute,
+                outConnect: false,
+            });
+        }
     }
 
     this.onEnter = function() {
-        for (let i = 5; i <= 8; i++) {
-            midi.sendShortMsg(0x94 + this.offset, 0x0E + i, SCLive4.paletteFromRGB(this.colorDisabled));
+        if (!this.paired) {
+            for (let i = 5; i <= 8; i++) {
+                midi.sendShortMsg(0x94 + this.offset, 0x0E + i, SCLive4.paletteFromRGB(this.colorDisabled));
+            }
         }
     };
 
     this.onParameter = function(direction, _shifted) {
+        if (this.paired) {
+            if (direction > 0) {
+                // Instrumental here
+                engine.setValue(`${this.groupPrefix}1]`, "mute", 0);
+                engine.setValue(`${this.groupPrefix}2]`, "mute", 0);
+                engine.setValue(`${this.groupPrefix}3]`, "mute", 0);
+                engine.setValue(`${this.groupPrefix}4]`, "mute", 1);
+                // Vocal there
+                engine.setValue(`${this.group2Prefix}1]`, "mute", 1);
+                engine.setValue(`${this.group2Prefix}2]`, "mute", 1);
+                engine.setValue(`${this.group2Prefix}3]`, "mute", 1);
+                engine.setValue(`${this.group2Prefix}4]`, "mute", 0);
+            } else {
+                // Vocal here
+                engine.setValue(`${this.groupPrefix}1]`, "mute", 1);
+                engine.setValue(`${this.groupPrefix}2]`, "mute", 1);
+                engine.setValue(`${this.groupPrefix}3]`, "mute", 1);
+                engine.setValue(`${this.groupPrefix}4]`, "mute", 0);
+                // Instrumental there
+                engine.setValue(`${this.group2Prefix}1]`, "mute", 0);
+                engine.setValue(`${this.group2Prefix}2]`, "mute", 0);
+                engine.setValue(`${this.group2Prefix}3]`, "mute", 0);
+                engine.setValue(`${this.group2Prefix}4]`, "mute", 1);
+            }
+            return;
+        }
         if (direction > 0) {
             // Instant instrumental
             engine.setValue(`${this.groupPrefix}1]`, "mute", 0);
