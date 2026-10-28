@@ -1267,6 +1267,126 @@ TEST_F(DeckPairEngineTest, LoopOperationsFromFollowerKeepOneRegion) {
     assertPairLocked();
 }
 
+// T45 (bench round 7, DECK_PAIR_PLAN.md 9.19, the DJ's own sequence): paired
+// decks looping, then the loop encoder on the FOLLOWER -- turn to shorten the
+// loop, reverse to lengthen it. The SC Live 4 encoder writes the raw
+// `beatloop_size`, which must cross the bridge as a deferred value carrier and
+// resize the leader's live pair loop: before the fix the follower resized only
+// its own replica (the size keys were not relayed, 9.12 a), the edge-triggered
+// mirror never healed the divergence, and the decks came out of loop mode in
+// mismatched loop states. Halve must still apply exactly once: the deferred
+// echo of a gesture quiesces against the relayed command's own result on the
+// leader (the 9.12 a regression, now guarded with the carrier in play).
+TEST_F(DeckPairEngineTest, LoopEncoderOnFollowerResizesThePairLoop) {
+    startLockedPair();
+    setControl(kLeader, QStringLiteral("quantize"), 0.0);
+    ProcessBuffer();
+
+    // Engage a 4-beat loop from the follower; that also sets the encoder
+    // position (size CO) to 4 on both members.
+    pulse(kFollower, QStringLiteral("beatloop_4_activate"));
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    ASSERT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    ASSERT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    ASSERT_EQ(4.0, control(kFollower, QStringLiteral("beatloop_size")));
+    const double regionBefore = control(kLeader, QStringLiteral("loop_end_position")) -
+            control(kLeader, QStringLiteral("loop_start_position"));
+    ASSERT_GT(regionBefore, 0.0);
+
+    // Encoder turn "shorten": a raw size write on the follower. The deferred
+    // carrier crosses on the next event-loop turn, the way the controller
+    // thread's write reaches the manager's thread in production.
+    setControl(kFollower, QStringLiteral("beatloop_size"), 2.0);
+    QTest::qWait(1);
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(2.0, control(kLeader, QStringLiteral("beatloop_size")))
+            << "turning the loop encoder on the follower must resize the "
+               "pair's live loop, not only the follower's replica "
+               "(bench round 7)";
+    EXPECT_EQ(2.0, control(kFollower, QStringLiteral("beatloop_size")));
+    EXPECT_EQ(1.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(1.0, control(kFollower, QStringLiteral("loop_enabled")));
+    const double shortened = control(kLeader, QStringLiteral("loop_end_position")) -
+            control(kLeader, QStringLiteral("loop_start_position"));
+    EXPECT_NEAR(regionBefore / 2.0, shortened, 2.0)
+            << "the leader's loop region must follow the encoder";
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_start_position")),
+            control(kFollower, QStringLiteral("loop_start_position")));
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+
+    // Encoder back the other way: "lengthen" -- the other half of the DJ's
+    // symptom, in the opposite direction.
+    setControl(kFollower, QStringLiteral("beatloop_size"), 4.0);
+    QTest::qWait(1);
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(4.0, control(kLeader, QStringLiteral("beatloop_size")));
+    EXPECT_NEAR(regionBefore,
+            control(kLeader, QStringLiteral("loop_end_position")) -
+                    control(kLeader, QStringLiteral("loop_start_position")),
+            2.0);
+    EXPECT_DOUBLE_EQ(control(kLeader, QStringLiteral("loop_end_position")),
+            control(kFollower, QStringLiteral("loop_end_position")));
+    assertPairLocked();
+
+    // Single-apply control with the carrier in play: halve from the follower
+    // halves the size 4 -> 2 exactly once. An inline echo that overtook the
+    // command (9.12 a) would land on 1.0 instead.
+    pulse(kFollower, QStringLiteral("loop_halve"));
+    QTest::qWait(1);
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(2.0, control(kLeader, QStringLiteral("beatloop_size")))
+            << "the deferred echo must quiesce against the leader's own "
+               "result, not halve a second time (9.12 a)";
+    EXPECT_EQ(2.0, control(kFollower, QStringLiteral("beatloop_size")));
+
+    // Ending loop mode: both members exit together and stay locked -- the
+    // exact moment the DJ reported the decks as out of sync.
+    pulse(kFollower, QStringLiteral("reloop_toggle"));
+    QTest::qWait(1);
+    for (int i = 0; i < 3; ++i) {
+        ProcessBuffer();
+    }
+    EXPECT_EQ(0.0, control(kLeader, QStringLiteral("loop_enabled")));
+    EXPECT_EQ(0.0, control(kFollower, QStringLiteral("loop_enabled")));
+    assertPairLocked();
+}
+
+// T45b: the same carrier mechanism for `beatjump_size`. A raw jump-size
+// selection on the follower must reach the leader, and the multiplicative
+// keys must stay single-apply through the bridge.
+TEST_F(DeckPairEngineTest, BeatJumpSizeFromFollowerCrossesTheBridgeOnce) {
+    startLockedPair();
+
+    setControl(kFollower, QStringLiteral("beatjump_size"), 4.0);
+    QTest::qWait(1);
+    ProcessBuffer();
+    EXPECT_EQ(4.0, control(kLeader, QStringLiteral("beatjump_size")))
+            << "a jump-size selection on the follower must land on the pair";
+
+    pulse(kFollower, QStringLiteral("beatjump_size_double"));
+    QTest::qWait(1);
+    ProcessBuffer();
+    EXPECT_EQ(8.0, control(kLeader, QStringLiteral("beatjump_size")))
+            << "doubling from the follower must apply exactly once (9.12 a)";
+    EXPECT_EQ(8.0, control(kFollower, QStringLiteral("beatjump_size")));
+
+    // And the configured jump still moves the pair as one.
+    pulse(kFollower, QStringLiteral("beatjump_forward"));
+    ProcessBuffer();
+    ProcessBuffer();
+    assertPairLocked();
+}
+
 // T20: quantize toggled from the follower mid-run, then a loop set from the
 // follower (loop_in + loop_out). One shared quantization decision (made on
 // the leader, whose transport the pair replays) engages the loop identically

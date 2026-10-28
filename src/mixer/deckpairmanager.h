@@ -6,6 +6,7 @@
 //
 #pragma once
 
+#include <QAtomicInteger>
 #include <QObject>
 #include <QString>
 #include <memory>
@@ -114,6 +115,28 @@ class DeckPairManager : public QObject {
         /// True for mirrors of owner-only (read-only) status controls, which
         /// only accept the owner's forceSet protocol.
         bool forced = false;
+        /// True for the deferred relay carriers (`beatloop_size`,
+        /// `beatjump_size`, DECK_PAIR_PLAN.md 9.19): the relay does not copy
+        /// the value inline but schedules one coalesced delivery on the
+        /// manager's event loop. The leader then applies the size *after*
+        /// the dispatch that produced it has fully converged on the
+        /// follower, so a size echo derived from a relayed gesture (halve,
+        /// double, sized beatloop) quiesces against that gesture's own
+        /// result on the leader instead of multiplying with it, while a raw
+        /// encoder write still crosses (9.12 a, bench round 7).
+        bool deferred = false;
+        /// Deferred carrier payload (9.19, corrected on the bench round-7
+        /// rig): the last follower value scheduled onto this carrier, plus
+        /// the leader's value as it stood at that scheduling. Delivery must
+        /// carry the *scheduled* value -- reading the follower "live" at
+        /// delivery time loses the encoder write, because the follower's
+        /// own engine re-confirms the size from its live loop grid before
+        /// the carrier fires. The baseline rejects a carrier whose value
+        /// the leader has since superseded through a newer intent. Both
+        /// are stored as IEEE bits: QAtomicInteger has no floating-point
+        /// specialization (qToDouble/qFromDouble).
+        QAtomicInteger<qint64> deferredValueBits{0};
+        QAtomicInteger<qint64> deferredLeaderAtScheduleBits{0};
         std::unique_ptr<ControlProxy> pFollower; // listener: relay / writer: mirror
         std::unique_ptr<ControlProxy> pLeader;   // writer: relay / listener: mirror
     };
@@ -170,6 +193,12 @@ class DeckPairManager : public QObject {
         /// Leader-side counterpart of pFollowerBuffer: the mirror treats the
         /// leader's mid-adoption window as slipping (9.16).
         EngineBuffer* pLeaderBuffer = nullptr;
+        /// Nonzero while a deferred-relay delivery (BridgeEntry::deferred,
+        /// 9.19) is scheduled. Written from whichever thread observed the
+        /// follower's size write, cleared on the main thread before the
+        /// delivery reads the current values (a write landing during the
+        /// delivery re-schedules it), so no deferred value is ever lost.
+        QAtomicInteger<int> deferredRelayPending{0};
     };
 
     Member* member(const QString& group) const;
@@ -216,6 +245,16 @@ class DeckPairManager : public QObject {
     /// Relays one follower command to the leader (F -> L, 5.5).
     void slotBridgeRelay(
             Pair* pPair, BridgeEntry* pEntry, double value, quint64 generation);
+    /// True for the relay keys that carry a *value* with dual meaning
+    /// (gesture parameter and live resize, `beatloop_size` /
+    /// `beatjump_size`): they relay deferred, see BridgeEntry::deferred
+    /// and DECK_PAIR_PLAN.md 9.19.
+    static bool isDeferredRelayItem(const QString& item);
+    /// Delivers the scheduled values of all deferred relay carriers of one
+    /// pair (coalesced, quiesced by equality, slip-gated, baseline-checked).
+    /// Runs on the manager's thread after the event loop turns (9.19).
+    /// Rejects itself on a bridge-generation mismatch.
+    void deliverDeferredRelays(Pair* pPair, quint64 bridgeGeneration);
     /// Mirrors one leader status onto the follower (L -> F, 5.5).
     void slotBridgeMirror(
             Pair* pPair, BridgeEntry* pEntry, double value, quint64 generation);

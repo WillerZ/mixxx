@@ -8,6 +8,7 @@
 
 #include <QThread>
 #include <QTimer>
+#include <cstring>
 
 #include "control/controlobject.h"
 #include "control/controlproxy.h"
@@ -33,6 +34,21 @@ constexpr qsizetype kPairSlotDistance = 2;
 constexpr qsizetype kNumberOfPairSlots = 2;
 
 constexpr char kPairEnabledItem[] = "pair_enabled";
+
+/// IEEE bit cast for the deferred relay carriers' atomics: QAtomicInteger
+/// has no floating-point specialization, so the doubles cross threads as
+/// qint64 bits (9.19).
+qint64 doubleToBits(double value) {
+    static_assert(sizeof(double) == sizeof(qint64));
+    qint64 bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+double bitsToDouble(qint64 bits) {
+    double value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
 
 /// Controls which would make a deck a transport authority of its own. On a
 /// pair follower they are refused, because the pair leader alone computes the
@@ -136,18 +152,31 @@ const QStringList& fullRelayItems() {
                 QStringLiteral("loop_remove"),
                 QStringLiteral("loop_anchor"),
                 QStringLiteral("loop_scale"),
-                // `beatloop_size` / `beatjump_size` are deliberately NOT
-                // relayed although 5.5 listed them: the engine rewrites them
-                // as status whenever a size-coded or scaling command runs
-                // (loop_halve halves the size CO, beatjump_size_double
-                // doubles it), and such a replica echo relayed to the leader
-                // applies the size change a second time -- loop_halve from
-                // the follower halved 4 -> 1 instead of 4 -> 2 (T19). The
-                // size is shared state on the mirror instead; every size
-                // *command* (beatloop_<size>_activate/toggle,
-                // beatloop_size via..., beatjump_size_double/halve,
-                // loop_scale) is relayed and the leader's resulting size
-                // flows back.
+                // `beatloop_size` / `beatjump_size` relay, but as *deferred
+                // value carriers* (BridgeEntry::deferred,
+                // DECK_PAIR_PLAN.md 9.19), not inline. They must cross in
+                // the first place: the SC Live 4 loop encoder writes the
+                // raw size to resize the live pair loop, and with the keys
+                // unrelayed (the state of 9.12 a) the follower resized only
+                // its own replica while the leader kept the old loop --
+                // out of sync after ending loop mode (bench round 7, T45).
+                // They must not cross inline either: the engine rewrites
+                // them as status whenever a size-carrying command runs
+                // (loop_halve halves the size CO), and an inline echo
+                // overtakes the bridge's own relay slot for that very
+                // command and applies the change a second time --
+                // loop_halve from the follower halved 4 -> 1 instead of
+                // 4 -> 2 (9.12 a, T19). Delivering the carriers after the
+                // event loop turns gives every gesture exactly one
+                // carrier: a relayed command lands first and the leader's
+                // own engine writes its matching size, so the echo
+                // quiesces by equality; a raw encoder write has no
+                // command, so it crosses on the next event-loop turn. All
+                // size *commands* (beatloop_<size>_activate/toggle,
+                // beatjump_size_double/halve, loop_halve/loop_double,
+                // loop_scale) stay inline relays as before.
+                QStringLiteral("beatloop_size"),
+                QStringLiteral("beatjump_size"),
                 QStringLiteral("beatloop_activate"),
                 QStringLiteral("beatjump_forward"),
                 QStringLiteral("beatjump_backward"),
@@ -294,10 +323,13 @@ const QStringList& fullMirrorItems() {
                 QStringLiteral("loop_enabled"),
                 QStringLiteral("loop_anchor"),
                 QStringLiteral("beatloop_size"),
-                // Size *state* flows L->F (the size keys are not relayed;
-                // see the note in fullRelayItems): a size selection or a
-                // doubling made on the leader lands on the follower, and
-                // vice versa via the leader's own engine.
+                // Size *state* flows both ways: leader selections land on
+                // the follower here, follower encoder writes cross on the
+                // deferred relay carriers (see the note in
+                // fullRelayItems, 9.19). Mirror writes of these keys echo
+                // into the relay listener under the write guard and
+                // quiesce; the carrier settles the pair because it compares
+                // against the leader value it saw at scheduling.
                 QStringLiteral("beatjump_size"),
                 QStringLiteral("cue_point"),
                 QStringLiteral("quantize"),
@@ -1293,6 +1325,7 @@ void DeckPairManager::buildBridge(
             auto entry = std::make_unique<BridgeEntry>();
             entry->item = item;
             entry->forced = !relay && isOwnerOnlyMirrorItem(item);
+            entry->deferred = relay && isDeferredRelayItem(item);
             entry->pFollower = std::make_unique<ControlProxy>(followerKey);
             entry->pLeader = std::make_unique<ControlProxy>(leaderKey);
             BridgeEntry* pEntry = entry.get();
@@ -1453,6 +1486,28 @@ void DeckPairManager::slotBridgeRelay(
             pPair->pFollowerBuffer->isSlipQuitAndAdoptPending()) {
         return;
     }
+    // Deferred carrier (9.19): the size keys never write the leader from
+    // this callback -- that is exactly how the echo of a relayed gesture
+    // overtakes the gesture and doubles it (9.12 a). Schedule one
+    // coalesced delivery instead. The carrier stores the *scheduled* value
+    // together with the leader's value at scheduling: at delivery the
+    // follower may already have re-confirmed its size from its live loop
+    // grid (the engine's setAndConfirm path), so reading the follower
+    // "live" would lose a raw encoder write entirely -- bench round 7
+    // showed the pair never adopting the encoder value. Delivery re-runs
+    // the slip gates and the staleness checks, and the leader baseline
+    // rejects a carrier whose value the leader has since superseded.
+    if (pEntry->deferred) {
+        pEntry->deferredValueBits.storeRelease(doubleToBits(value));
+        pEntry->deferredLeaderAtScheduleBits.storeRelease(
+                doubleToBits(pEntry->pLeader->get()));
+        if (pPair->deferredRelayPending.fetchAndStoreOrdered(1) == 0) {
+            QTimer::singleShot(0, this, [this, pPair, generation]() {
+                deliverDeferredRelays(pPair, generation);
+            });
+        }
+        return;
+    }
     // `jog` is not bridged at all (see fullRelayItems): the accumulator's
     // meaning is created by its consumer's read-and-zero, so it crosses on the
     // pair transport's accumulator lane, read at the follower's gated consume
@@ -1471,6 +1526,73 @@ void DeckPairManager::slotBridgeRelay(
     }
     const BridgeWriteGuard writeGuard;
     pEntry->pLeader->set(value);
+}
+
+// static
+bool DeckPairManager::isDeferredRelayItem(const QString& item) {
+    // The two size controls carry a value with dual meaning: a parameter
+    // for the next loop/jump and, while a loop is live, a resize of that
+    // loop. They are the only relay keys that the engine also rewrites as
+    // status, which is why they cross deferred (9.19, 9.12 a).
+    return item == QLatin1String("beatloop_size") ||
+            item == QLatin1String("beatjump_size");
+}
+
+void DeckPairManager::deliverDeferredRelays(
+        Pair* pPair, quint64 bridgeGeneration) {
+    // Clear the schedule flag before reading anything: a size write that
+    // lands while this delivery runs re-schedules it instead of getting
+    // lost behind a flag that is still set.
+    pPair->deferredRelayPending.storeRelease(0);
+    // Staleness rules first -- pEntry may already be freed (9.18 residual,
+    // same contract as the queued mirror): nothing may be touched before
+    // these checks. The bridge generation rejects teardown and re-forming.
+    if (!pPair->active || pPair->bridgeGeneration != bridgeGeneration) {
+        return;
+    }
+    // The slip gates that refused the scheduling event apply at delivery
+    // too: a roll pad may have engaged in the meantime, and then the size
+    // on the follower is roll state, not a pair command (R8).
+    if (pPair->pFollowerSlipEnabled && pPair->pFollowerSlipEnabled->toBool()) {
+        return;
+    }
+    if (pPair->pFollowerBuffer != nullptr &&
+            pPair->pFollowerBuffer->isSlipQuitAndAdoptPending()) {
+        return;
+    }
+    for (const auto& pEntry : pPair->relays) {
+        if (!pEntry->deferred) {
+            continue;
+        }
+        // The *scheduled* value, not the follower's live one: the
+        // follower's engine re-confirms the size from its loop grid
+        // before this carrier fires (bench round 7), so the live read
+        // would deliver the re-confirmed old value and the encoder turn
+        // would be lost. Coalescing still holds: every scheduling since
+        // the last delivery overwrote deferredValue, so this is the last
+        // write of the burst.
+        const double value =
+                bitsToDouble(pEntry->deferredValueBits.loadAcquire());
+        const double baseline = bitsToDouble(
+                pEntry->deferredLeaderAtScheduleBits.loadAcquire());
+        const double leaderNow = pEntry->pLeader->get();
+        // Quiescence by equality: a relayed gesture already produced this
+        // value on the leader through its own engine, so the echo of that
+        // gesture is dropped and never doubles (the 9.12 a guarantee, now
+        // enforced by ordering rather than by not relaying at all).
+        if (leaderNow == value) {
+            continue;
+        }
+        // Stale against a newer intent: the leader moved since the value
+        // was scheduled, so something fresher (a leader-side command or a
+        // mirrored gesture) owns the size now. Drop; the leader's result
+        // mirrors back and the follower converges on it.
+        if (leaderNow != baseline) {
+            continue;
+        }
+        const BridgeWriteGuard writeGuard;
+        pEntry->pLeader->set(value);
+    }
 }
 
 void DeckPairManager::slotBridgeMirror(

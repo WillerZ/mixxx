@@ -642,6 +642,8 @@ same-callback frame-exact position equality + play/loop-state equality; and a de
 | T42 | unit | Roll-pad dance on the **leader** while the pair loops (mapping's size→roll→size order) | roll engages on the first press, pair loop alive on both members across the whole cycle (§9.14) |
 | T43 | integration | SC Live roll/slicer sequences on a **controller thread** against a live engine thread while the main thread pumps its event loop; proxy-level spies attribute every slip/loop write to the writing thread | no slip ever enabled on the deck that did not gesture (R8), no stuck slip, pair loop state converged at every cycle boundary (§9.15); replica loop region never mirrored while the leader slips (§9.16) |
 | T44 | unit | The DJ's round-6 repro: no pair loop, roll pad dance on the **leader**, sampled **mid-gesture** | leader rolls (slip engaged), follower's replica shows none of the roll: `loop_enabled` 0, roll size's `beatloop_*_enabled` 0, loop region unmoved, pair plane keeps advancing; clean convergence on release (§9.16) |
+| T45 | unit | The DJ's round-7 repro: pair looping, then turn the **loop encoder dial on the follower** (raw `beatloop_size` writes), reverse direction, then end the loop | the pair adopts each encoder length within one event-loop turn, both members' loop regions identical at every settle point, reverse shortens again; a relayed gesture (halve) is never doubled (§9.19) |
+| T45b | unit | Raw `beatjump_size` write from the follower, then `beatjump_size_double` | the selection lands on the pair within one event-loop turn and the doubling applies **exactly once** (9.12 a holds with the carrier in play); the jump still moves the pair as one (§9.19) |
 | T38 | build | `ctest -R "DeckPair"`, incl. `-D STEM=ON` job | all green |
 | T39 | engine | **Load race**: relayed seek arrives while follower is mid-load (seek dropped per `enginebuffer.cpp:593`) | positions equal again on the first follower callback after load; no stale queued-seek artifacts |
 
@@ -1422,6 +1424,78 @@ tested behaviour (T8/T8b, `PassthroughDisbandsThePair`) is **disband**, matching
 > automated harness only. Nothing in it has been verified on DJ hardware, and
 > the Phase-5 exit criterion "developer's bench sign-off" is **outstanding**;
 > `DECK_PAIR_BENCH_PROTOCOL.md` is the gate.
+
+### 9.19 Bench round 7 (SC Live 4) — the loop encoder on the follower: deferred value carriers
+
+**Symptom (the DJ's own sequence, no slip, no unpair).** Decks paired and
+looping; the DJ turned the loop **encoder dial** on the follower to shorten the
+loop, reversed it to lengthen. The loop lengths did not track across the decks,
+and on ending loop mode the pair was out of sync — the two members exited with
+mismatched loop states.
+
+**Root cause.** The SC Live 4 encoder writes the raw `beatloop_size` on the
+deck under the finger. Per 9.12 a the size keys were excluded from the relay
+entirely (the inline echo of a size-carrying command overtook the command's own
+bridge slot and applied it twice — loop_halve halved 4 → 1, T19), so the raw
+write resized only the follower's replica; the edge-triggered mirror never
+healed the divergence because both members' `beatloop_size` COs held *different
+equal-valued states the mirror had no reason to re-copy*. The pair then ran two
+different live loops until someone exited loop mode.
+
+**Fix: deferred value carriers (`BridgeEntry::deferred`, 9.19).**
+`beatloop_size` and `beatjump_size` rejoin the relay list, but their relay slot
+never writes the leader from the callback. Instead it stores the **scheduled
+value** plus the **leader's value at scheduling** (the baseline) into per-entry
+`QAtomicInteger<qint64>` bit fields (QAtomicInteger has no FP specialization;
+`qToDouble`/`qFromDouble` are gone in Qt6, so local memcpy bit casts), sets a
+per-pair `deferredRelayPending` flag and schedules exactly one
+`QTimer::singleShot(0)` delivery on the manager's event loop — a burst of
+encoder ticks coalesces to its last value.
+
+`deliverDeferredRelays()` clears the pending flag **first** (a write arriving
+mid-delivery re-schedules rather than being lost), then re-runs the staleness
+and slip gates (bridge generation, `active`, follower slip, quit-and-adopt —
+R8: a roll pad pressed between schedule and delivery makes the follower's size
+roll state, not a pair command). Per deferred entry:
+
+- **quiescence by equality** — if the leader already holds the scheduled value,
+  a relayed command (halve/double/sized activate) produced it through the
+  leader's own engine during the event-loop turn; the echo is dropped, so 9.12
+  a holds *by ordering* rather than by not relaying;
+- **supersession** — if the leader holds something other than the baseline it
+  had at scheduling, a newer intent owns the size; the stale carrier is dropped
+  and the leader's result mirrors back;
+- otherwise the value crosses under the `BridgeWriteGuard`.
+
+Why the carrier stores the value instead of reading the follower live at
+delivery: the follower's engine **re-confirms the size from its live loop grid**
+(setAndConfirm) before the carrier fires, so a live read loses the encoder write
+entirely — that variant shipped first and the bench showed the pair never
+adopting the encoder value.
+
+**Rejected: generation-based staleness.** A `deferredRelayGeneration` bumped by
+every re-anchor was tried and removed: engaging a loop on a playing quantized
+follower uses slip **internally**, and the slip-release re-anchor fired between
+the encoder write and the delivery, dropping legitimate carriers. No generation
+is needed: re-anchors only write follower ← leader, never the leader, so the
+baseline check alone rejects exactly the superseded carriers.
+
+**Tests.** T45 (`LoopEncoderOnFollowerResizesThePairLoop`) walks the DJ's whole
+sequence — engage 4 from the follower, encoder to 2 (both members' regions
+halve and stay identical), encoder back to 4, `loop_halve` applies exactly
+once with the carrier in play, and reloop exit finds both members loop-off and
+frame-locked. T45b covers `beatjump_size` the same way. T19 (the 9.12 a
+regression) stays green.
+
+**Harness note.** The round also repaired the shared fixture
+(`deckpairtestbase.h`): the RubberBand pool is now scoped to the fixture (env
+drift made its singleton assert abort any test that shifted playback), the beat
+grid is attached after all four tracks load, and the stereo reference wav
+(`sine-30-stereo.wav`) the fixture loads is tracked. Remaining
+`ctest -R DeckPair` INTERRUPTs are pre-existing debug-build/environment issues
+(double-registration and quantize asserts on non-fixture paths, the RubberBand
+singleton outside the fixture) — verified failing identically at the branch
+head without these changes; not introduced by 9.19.
 
 ## 10. Explicitly out of scope
 
