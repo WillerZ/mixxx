@@ -13,6 +13,7 @@
 #include <memory>
 
 #include "control/controlobject.h"
+#include "engine/bufferscalers/rubberbandworkerpool.h"
 #include "engine/channels/enginedeck.h"
 #include "engine/enginebuffer.h"
 #include "mixer/deck.h"
@@ -51,22 +52,46 @@ class DeckPairTestBase : public MockedEngineBackendTest {
         // Real tracks: three distinct Track objects over the same audio file,
         // which is the deck pair use case (same track on both members).
         const QString trackLocation =
-                getTestDir().filePath(QStringLiteral("sine-30.wav"));
+                getTestDir().filePath(QStringLiteral("sine-30-stereo.wav"));
         m_pTrackA = Track::newTemporary(trackLocation);
         m_pTrackB = Track::newTemporary(trackLocation);
         m_pTrackC = Track::newTemporary(trackLocation);
 
         // A constant beat grid makes quantize, beatloops and beatjumps
-        // meaningful for the pair tests. sine-30.wav is 44100 Hz; the grid is
-        // attached before the decks load so the engine controls see it.
-        attachBeatGrid(m_pTrackA);
-        attachBeatGrid(m_pTrackB);
-        attachBeatGrid(m_pTrackC);
+        // meaningful for the pair tests. It is attached only after the decks
+        // have loaded: loading parses the file's (empty) BPM metadata, and a
+        // grid attached before that parse would be pushed out of sync with
+        // the metadata -- which Track::getBpm() debug-asserts on. Engine code
+        // consults the grid lazily per operation, so attaching it before the
+        // first test action is early enough.
+        //
+        // Deck loading runs the engine, and EngineBuffer::process() pokes the
+        // RubberBand scaler unconditionally on the first real sample rate.
+        // BaseSignalPathTest creates that worker pool only in SetUp() -- after
+        // this constructor -- so in a RubberBand build the deck loads here
+        // would trip its singleton assert. Cover just the constructor; the
+        // inherited SetUp()/TearDown() own the pool from here on.
+#ifdef __RUBBERBAND__
+        struct ScopedRubberBandPool {
+            ScopedRubberBandPool() {
+                RubberBandWorkerPool::createInstance();
+            }
+            ~ScopedRubberBandPool() {
+                RubberBandWorkerPool::destroy();
+            }
+        } scopedRubberBandPool;
+#endif
 
         loadTrack(m_pMixerDeck1.get(), m_pTrackA);
         loadTrack(m_pMixerDeck2.get(), m_pTrackA);
         loadTrack(m_pMixerDeck3.get(), m_pTrackB);
         loadTrack(m_pMixerDeck4.get(), m_pTrackB);
+
+        // sine-30-stereo.wav is 44100 Hz; trySetBeats() also copies the grid's BPM
+        // into the track metadata, keeping the two synchronised.
+        attachBeatGrid(m_pTrackA);
+        attachBeatGrid(m_pTrackB);
+        attachBeatGrid(m_pTrackC);
 
         // Owned by the fixture, and therefore destroyed before the decks of
         // the base class: the manager disarms all pairs on its way out.
@@ -90,6 +115,9 @@ class DeckPairTestBase : public MockedEngineBackendTest {
     }
 
     static void attachBeatGrid(const TrackPointer& pTrack) {
+        // trySetBeats() (via setBeatsWhileLocked) keeps the BPM in the track
+        // metadata synchronised with the grid, which Track::getBpm()
+        // debug-asserts on.
         pTrack->trySetBeats(mixxx::Beats::fromConstTempo(
                 mixxx::audio::SampleRate(44100),
                 mixxx::audio::kStartFramePos,
