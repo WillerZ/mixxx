@@ -472,8 +472,8 @@ void EngineMixer::process(const std::size_t bufferSize) {
             // headMix center. Only the signal that is faded away from gets
             // ramped down linearly towards the opposite end. This keeps both
             // ears free of the other signal and never exceeds unity gain.
-            pflMixGainInHeadphones = std::min<CSAMPLE_GAIN>(1.0, 1.0 - cf_val);
-            mainMixGainInHeadphones = std::min<CSAMPLE_GAIN>(1.0, 1.0 + cf_val);
+            pflMixGainInHeadphones = std::min<CSAMPLE_GAIN>(1.0f, 1.0f - cf_val);
+            mainMixGainInHeadphones = std::min<CSAMPLE_GAIN>(1.0f, 1.0f + cf_val);
         } else {
             pflMixGainInHeadphones = 0.5f * (-cf_val + 1.0f);
             mainMixGainInHeadphones = 0.5f * (cf_val + 1.0f);
