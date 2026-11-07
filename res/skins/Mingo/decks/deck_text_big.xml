@@ -27,13 +27,13 @@ Variables:
             <Property>titleInfo</Property>
             <Alignment>Left</Alignment>
             <Elide>right</Elide>
-            <Size>1me,28f</Size>
+            <Size>1me,24f</Size>
             <Channel><Variable name="chanNum"/></Channel>
           </TrackProperty>
 
           <Key><!-- Key -->
             <ObjectName>MingoTrackKey</ObjectName>
-            <Size>56f,28f</Size>
+            <Size>48f,24f</Size>
             <Group><Variable name="group"/></Group>
             <DisplayCents>false</DisplayCents>
           </Key>
@@ -57,7 +57,7 @@ Variables:
 
           <Label>
             <ObjectName>MingoTrackBy</ObjectName>
-            <Size>24f,20f</Size>
+            <Size>22f,18f</Size>
             <Text>by </Text>
             <Alignment>left</Alignment>
           </Label>
@@ -66,7 +66,7 @@ Variables:
             <TooltipId>track_artist</TooltipId>
             <ObjectName>MingoTrackArtist</ObjectName>
             <Elide>right</Elide>
-            <Size>1me,20f</Size>
+            <Size>1me,18f</Size>
             <Property>artist</Property>
             <Channel><Variable name="chanNum"/></Channel>
           </TrackProperty>

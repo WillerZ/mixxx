@@ -125,5 +125,9 @@ Description:
         </Children>
       </WidgetGroup>
     </Children>
+    <Connection>
+      <ConfigKey>[Skin],show_settings</ConfigKey>
+      <BindProperty>visible</BindProperty>
+    </Connection>
   </WidgetGroup>
 </Template>

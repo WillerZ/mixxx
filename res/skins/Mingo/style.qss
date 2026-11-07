@@ -3243,7 +3243,7 @@ WRateRange {
   background-color: #333;
   }
   #MingoTrackTitle {
-    font-size: 22px/22px;
+    font-size: 19px/19px;
     font-weight: bold;
     color: #ffffff;
     }
@@ -3257,7 +3257,7 @@ WRateRange {
     color: #888;
     }
   #MingoTrackArtist {
-    font-size: 15px/15px;
+    font-size: 13px/13px;
     font-weight: bold;
     color: #b4b4b4;
     }
@@ -3335,3 +3335,12 @@ WRateRange {
       min-height: 30px;
       padding-left: 4px;
       }
+
+/* Library sidebar: readable labels and touch-height rows in the
+   widened left pane. */
+WLibrarySidebar {
+  font-size: 15px;
+  }
+  WLibrarySidebar::item {
+    min-height: 36px;
+    }

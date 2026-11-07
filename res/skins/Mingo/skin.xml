@@ -29,7 +29,7 @@
       <!-- Set skin defaults. -->
       <attribute config_key="[App],num_decks">4</attribute>
       <attribute config_key="[App],num_samplers">16</attribute>
-      <attribute persist="true" config_key="[Mingo],colorLogo">0</attribute>
+      <attribute persist="true" config_key="[Mingo],colorLogo">1</attribute>
       <!-- Decks -->
       <attribute persist="true" config_key="[Skin],show_4decks">1</attribute>
       <attribute persist="true" config_key="[Skin],show_intro_outro_cues">1</attribute>
@@ -290,7 +290,7 @@
                       <ObjectName>WaveformSplitter</ObjectName>
                       <Orientation>vertical</Orientation>
                       <SizePolicy>me,me</SizePolicy>
-                      <SplitSizes>470,230</SplitSizes>
+                      <SplitSizes>458,242</SplitSizes>
                       <SplitSizesConfigKey>[Skin],stackedWaveforms_splitSize</SplitSizesConfigKey>
                       <Collapsible>0,0</Collapsible>
                       <Connection>

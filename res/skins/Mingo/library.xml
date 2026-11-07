@@ -28,7 +28,7 @@ Description:
           <Splitter><!-- Split Tree / Tracks table -->
             <ObjectName>LibrarySplitter</ObjectName>
             <SizePolicy>me,me</SizePolicy>
-            <SplitSizes>1,6</SplitSizes>
+            <SplitSizes>2,6</SplitSizes>
             <SplitSizesConfigKey>[Skin],librarySidebar_splitsize</SplitSizesConfigKey>
             <Orientation>horizontal</Orientation>
             <Collapsible>1,0</Collapsible>

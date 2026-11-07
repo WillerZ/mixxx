@@ -24,6 +24,7 @@ Description:
         <Children>
 
           <WidgetGroup><Size>2f,0min</Size></WidgetGroup>
+          <WidgetGroup><Size>0f,4f</Size></WidgetGroup><!-- vertical centre pad -->
 
           <PushButton>
             <Size>102f,24f</Size>
