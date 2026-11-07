@@ -2,8 +2,13 @@
 Description:
   Mingo: one zoomed scrolling waveform, growing to fill available
   height (minimum 70px). No label gutter — pair_column.xml owns that.
+  With waveHalf set to top/bottom the widget renders only that half of
+  the waveform (amplitude identical to one full waveform, the zero line
+  sits on the inner edge); pair_column.xml stacks top over bottom so a
+  deck pair reads as one waveform split across the seam.
 Variables:
   chanNum   : channel number
+  waveHalf  : optional — "top", "bottom", or unset for a full waveform
   SignalBgColor / SignalColor : pair colours
   SignalRGBLowColor / SignalRGBMidColor / SignalRGBHighColor
 -->
@@ -13,6 +18,7 @@ Variables:
     <ObjectName>Waveform</ObjectName>
     <Size>0me,70me</Size>
     <Channel><Variable name="chanNum"/></Channel>
+    <WaveHalf><Variable name="waveHalf"/></WaveHalf>
     <BgColor><Variable name="SignalBgColor"/></BgColor>
     <SignalColor><Variable name="SignalColor"/></SignalColor>
     <SignalRGBLowColor><Variable name="SignalRGBLowColor"/></SignalRGBLowColor>
