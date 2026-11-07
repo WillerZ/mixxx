@@ -1,0 +1,81 @@
+<!--
+Description:
+  Mingo: deck-pair header — big title with track key on the right,
+  artist underneath, separated by the track-colour strip. No time,
+  no duration, no BPM (DESIGN.md: not needed).
+Variables:
+  chanNum : channel number (the pair's lower-numbered, leading deck)
+-->
+<Template>
+  <SetVariable name="group">[Channel<Variable name="chanNum"/>]</SetVariable>
+  <WidgetGroup>
+    <ObjectName>MingoDeckHeader</ObjectName>
+    <Layout>vertical</Layout>
+    <SizePolicy>i,me</SizePolicy>
+    <Children>
+
+      <WidgetGroup><!-- Title + Key -->
+        <Layout>horizontal</Layout>
+        <SizePolicy>i,me</SizePolicy>
+        <Children>
+
+          <WidgetGroup><Size>4f,1min</Size></WidgetGroup>
+
+          <TrackProperty><!-- Title -->
+            <TooltipId>track_title</TooltipId>
+            <ObjectName>MingoTrackTitle</ObjectName>
+            <Property>titleInfo</Property>
+            <Alignment>Left</Alignment>
+            <Elide>right</Elide>
+            <Size>1me,28f</Size>
+            <Channel><Variable name="chanNum"/></Channel>
+          </TrackProperty>
+
+          <TextProperty><!-- Key -->
+            <ObjectName>MingoTrackKey</ObjectName>
+            <Property>initial_key</Property>
+            <Alignment>right</Alignment>
+            <Size>56f,28f</Size>
+            <Group><Variable name="group"/></Group>
+          </TextProperty>
+
+          <WidgetGroup><Size>4f,1min</Size></WidgetGroup>
+        </Children>
+      </WidgetGroup><!-- /Title + Key -->
+
+      <TrackWidgetGroup>
+        <Size>0me,2f</Size>
+        <Group><Variable name="group"/></Group>
+        <TrackColorAlpha>255</TrackColorAlpha>
+      </TrackWidgetGroup>
+
+      <WidgetGroup><!-- by Artist -->
+        <Layout>horizontal</Layout>
+        <SizePolicy>i,me</SizePolicy>
+        <Children>
+
+          <WidgetGroup><Size>4f,1min</Size></WidgetGroup>
+
+          <Label>
+            <ObjectName>MingoTrackBy</ObjectName>
+            <Size>24f,20f</Size>
+            <Text>by </Text>
+            <Alignment>left</Alignment>
+          </Label>
+
+          <TrackProperty><!-- Artist -->
+            <TooltipId>track_artist</TooltipId>
+            <ObjectName>MingoTrackArtist</ObjectName>
+            <Elide>right</Elide>
+            <Size>1me,20f</Size>
+            <Property>artist</Property>
+            <Channel><Variable name="chanNum"/></Channel>
+          </TrackProperty>
+
+          <WidgetGroup><Size>4f,1min</Size></WidgetGroup>
+        </Children>
+      </WidgetGroup><!-- /by Artist -->
+
+    </Children>
+  </WidgetGroup>
+</Template>

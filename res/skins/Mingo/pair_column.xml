@@ -1,0 +1,79 @@
+<!--
+Description:
+  Mingo: one deck-pair column — track identity header for the pair,
+  then a bordered pair box holding the two physical decks' scan rows
+  (zoomed waveform + overview) stacked, with the pair label ("1|3")
+  centred in a gutter spanning both rows.
+Variables:
+  chanTop     : lower-numbered deck of the pair (label + header source)
+  chanBottom  : higher-numbered deck of the pair
+  LabelText   : pair label, e.g. "1|3"
+  SignalColor_Pair / SignalBgColor_Pair : pair colours
+-->
+<Template>
+  <WidgetGroup>
+    <ObjectName>MingoPairColumn</ObjectName>
+    <Layout>vertical</Layout>
+    <SizePolicy>me,me</SizePolicy>
+    <Children>
+
+      <Template src="skins:Mingo/decks/deck_text_big.xml">
+        <SetVariable name="chanNum"><Variable name="chanTop"/></SetVariable>
+      </Template>
+
+      <WidgetGroup><!-- pair box: label gutter + stacked pair rows -->
+        <ObjectName>MingoPairBox<Variable name="chanTop"/></ObjectName>
+        <Layout>horizontal</Layout>
+        <SizePolicy>me,me</SizePolicy>
+        <Children>
+
+          <WidgetGroup><!-- gutter -->
+            <Layout>vertical</Layout>
+            <SizePolicy>min,me</SizePolicy>
+            <Children>
+              <Label>
+                <ObjectName>MingoWaveLabel<Variable name="chanTop"/></ObjectName>
+                <Text><Variable name="LabelText"/></Text>
+                <Alignment>center</Alignment>
+                <Size>44f,1me</Size>
+              </Label>
+            </Children>
+          </WidgetGroup>
+
+          <WidgetGroup><!-- stacked pair rows -->
+            <Layout>vertical</Layout>
+            <SizePolicy>me,me</SizePolicy>
+            <Children>
+
+              <Template src="skins:Mingo/pair_row.xml">
+                <SetVariable name="chanNum"><Variable name="chanTop"/></SetVariable>
+                <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
+                <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
+                <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
+                <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
+                <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
+              </Template>
+
+              <WidgetGroup><!-- separator between pair rows -->
+                <ObjectName>MingoPairSep</ObjectName>
+                <Size>0me,1f</Size>
+              </WidgetGroup>
+
+              <Template src="skins:Mingo/pair_row.xml">
+                <SetVariable name="chanNum"><Variable name="chanBottom"/></SetVariable>
+                <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
+                <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
+                <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
+                <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
+                <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
+              </Template>
+
+            </Children>
+          </WidgetGroup>
+
+        </Children>
+      </WidgetGroup><!-- /pair box -->
+
+    </Children>
+  </WidgetGroup>
+</Template>

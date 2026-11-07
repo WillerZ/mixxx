@@ -1,0 +1,77 @@
+<!--
+Description:
+  Mingo: one zoomed scrolling waveform, growing to fill available
+  height (minimum 70px). No label gutter — pair_column.xml owns that.
+Variables:
+  chanNum   : channel number
+  SignalBgColor / SignalColor : pair colours
+  SignalRGBLowColor / SignalRGBMidColor / SignalRGBHighColor
+-->
+<Template>
+  <Visual>
+    <TooltipId>waveform_display</TooltipId>
+    <ObjectName>Waveform</ObjectName>
+    <Size>0me,70me</Size>
+    <Channel><Variable name="chanNum"/></Channel>
+    <BgColor><Variable name="SignalBgColor"/></BgColor>
+    <SignalColor><Variable name="SignalColor"/></SignalColor>
+    <SignalRGBLowColor><Variable name="SignalRGBLowColor"/></SignalRGBLowColor>
+    <SignalRGBMidColor><Variable name="SignalRGBMidColor"/></SignalRGBMidColor>
+    <SignalRGBHighColor><Variable name="SignalRGBHighColor"/></SignalRGBHighColor>
+    <BeatColor>#ffffff</BeatColor>
+    <PlayPosColor>#FF4300</PlayPosColor>
+    <EndOfTrackColor><Variable name="EndOfTrackColor"/></EndOfTrackColor>
+    <SlipBorderOutlineColor><Variable name="SlipBorderOutlineColor"/></SlipBorderOutlineColor>
+    <SlipBorderTopOutlineSize><Variable name="SlipBorderTopOutlineSize"/></SlipBorderTopOutlineSize>
+    <SlipBorderBottomOutlineSize><Variable name="SlipBorderBottomOutlineSize"/></SlipBorderBottomOutlineSize>
+    <DefaultMark>
+      <Align>bottom|right</Align>
+      <Color>#666666</Color>
+      <TextColor>#FFFFFF</TextColor>
+      <Text> %1 </Text>
+    </DefaultMark>
+    <Mark>
+      <Control>cue_point</Control>
+      <Text>Q</Text>
+      <Align>top|right</Align>
+      <Color>#FF0080</Color>
+      <TextColor>#FFFFFF</TextColor>
+    </Mark>
+    <!-- Loop -->
+    <MarkRange>
+      <StartControl>loop_start_position</StartControl>
+      <EndControl>loop_end_position</EndControl>
+      <EnabledControl>loop_enabled</EnabledControl>
+      <Color>#00FF00</Color>
+      <DisabledColor>#FFFFFF</DisabledColor>
+    </MarkRange>
+    <Mark>
+      <Control>loop_start_position</Control>
+      <Text>IN</Text>
+      <Align>top|left</Align>
+      <Color>#00FF00</Color>
+      <TextColor>#FFFFFF</TextColor>
+    </Mark>
+    <Mark>
+      <Control>loop_end_position</Control>
+      <Text>OUT</Text>
+      <Align>top|right</Align>
+      <Color>#00FF00</Color>
+      <TextColor>#FFFFFF</TextColor>
+    </Mark>
+    <!-- Intro -->
+    <MarkRange>
+      <StartControl>intro_start_position</StartControl>
+      <EndControl>intro_end_position</EndControl>
+      <VisibilityControl>[Skin],show_intro_outro_cues</VisibilityControl>
+      <Color>#0000FF</Color>
+    </MarkRange>
+    <!-- Outro -->
+    <MarkRange>
+      <StartControl>outro_start_position</StartControl>
+      <EndControl>outro_end_position</EndControl>
+      <VisibilityControl>[Skin],show_intro_outro_cues</VisibilityControl>
+      <Color>#0000FF</Color>
+    </MarkRange>
+  </Visual>
+</Template>

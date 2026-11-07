@@ -3234,3 +3234,56 @@ WEffectChainPresetSelector::indicator::unchecked:selected,
 WRateRange {
     font-size: 11px;
 }
+
+
+/* ########################## Mingo ####################################
+   Deck-pair columns: header, pair box with label gutter, scan rows. */
+
+#MingoDeckHeader {
+  background-color: #333;
+  }
+  #MingoTrackTitle {
+    font-size: 22px/22px;
+    font-weight: bold;
+    color: #ffffff;
+    }
+  #MingoTrackKey {
+    font-size: 15px/15px;
+    font-weight: bold;
+    color: #ffffff;
+    padding-right: 2px;
+    }
+  WLabel#MingoTrackBy {
+    color: #888;
+    }
+  #MingoTrackArtist {
+    font-size: 15px/15px;
+    font-weight: bold;
+    color: #b4b4b4;
+    }
+
+/* Pair box: border tinted with the pair's signal colour */
+#MingoPairBox1 {
+  border: 1px solid #DF4DF0;
+  }
+#MingoPairBox2 {
+  border: 1px solid #5EBAFF;
+  }
+
+  /* Gutter label spans both pair rows, rotated upright, colour = pair */
+  WLabel#MingoWaveLabel1 {
+    color: #DF4DF0;
+    font-size: 18px/18px;
+    font-weight: bold;
+    background-color: transparent;
+    }
+  WLabel#MingoWaveLabel2 {
+    color: #5EBAFF;
+    font-size: 18px/18px;
+    font-weight: bold;
+    background-color: transparent;
+    }
+
+  #MingoPairSep {
+    background-color: #4a4a4a;
+    }

@@ -172,6 +172,11 @@
     <SetVariable name="SignalBgColor_12">#3A0440</SetVariable>
     <SetVariable name="SignalColor_34">#5EBAFF</SetVariable>
     <SetVariable name="SignalBgColor_34">#19260B</SetVariable>
+    <!-- Mingo: pairs read as one unit — pair 1|3 purple, pair 2|4 blue -->
+    <SetVariable name="SignalColor_PairA">#DF4DF0</SetVariable>
+    <SetVariable name="SignalBgColor_PairA">#3A0440</SetVariable>
+    <SetVariable name="SignalColor_PairB">#5EBAFF</SetVariable>
+    <SetVariable name="SignalBgColor_PairB">#0B1E26</SetVariable>
     <SetVariable name="SpinnyCoverColor_12">purple</SetVariable>
     <SetVariable name="SpinnyCoverColor_34">green</SetVariable>
     <!-- Signal color for waveform overview in decks 1/2, preview deck, samplers and library -->
@@ -406,7 +411,7 @@
                       <ObjectName>WaveformSplitter</ObjectName>
                       <Orientation>vertical</Orientation>
                       <SizePolicy>me,me</SizePolicy>
-                      <SplitSizes>100,550</SplitSizes>
+                      <SplitSizes>470,230</SplitSizes>
                       <SplitSizesConfigKey>[Skin],stackedWaveforms_splitSize</SplitSizesConfigKey>
                       <Collapsible>0,0</Collapsible>
                       <Connection>
@@ -416,61 +421,37 @@
                       </Connection>
                       <Children>
 
-                        <WidgetGroup>
-                          <Layout>vertical</Layout>
+                        <WidgetGroup><!-- deck pair columns -->
+                          <ObjectName>MingoPairColumns</ObjectName>
+                          <Layout>horizontal</Layout>
                           <SizePolicy>me,me</SizePolicy>
                           <Children>
-                            <Template src="skins:Mingo/waveforms_container.xml"/>
-                          </Children>
-                          <Connection>
-                            <ConfigKey persist="true">[Skin],show_waveforms</ConfigKey>
-                            <BindProperty>visible</BindProperty>
-                          </Connection>
-                        </WidgetGroup>
 
-                        <WidgetGroup><!-- Decks + FX + Samplers + Library -->
-                          <Layout>vertical</Layout>
-                          <SizePolicy>me,min</SizePolicy>
-                          <Children>
+                            <Template src="skins:Mingo/pair_column.xml">
+                              <SetVariable name="chanTop">1</SetVariable>
+                              <SetVariable name="chanBottom">3</SetVariable>
+                              <SetVariable name="LabelText">1|3</SetVariable>
+                              <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairA"/></SetVariable>
+                              <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairA"/></SetVariable>
+                            </Template>
 
-                            <Template src="skins:Mingo/decks_12.xml"/>
+                            <WidgetGroup><Size>4f,1me</Size></WidgetGroup>
 
-                            <WidgetGroup>
-                              <Layout>vertical</Layout>
-                              <SizePolicy>me,min</SizePolicy>
-                              <Children>
-                                <SingletonContainer>
-                                  <ObjectName>FxUnits_12_Singleton</ObjectName>
-                                </SingletonContainer>
-                              </Children>
-                              <Connection>
-                                <ConfigKey persist="true">[Skin],show_4effectunits</ConfigKey>
-                                <BindProperty>visible</BindProperty>
-                              </Connection>
-                            </WidgetGroup>
-
-                            <Template src="skins:Mingo/decks_34.xml"/>
-
-                            <WidgetGroup>
-                              <Layout>vertical</Layout>
-                              <Children>
-                                <SingletonContainer>
-                                  <ObjectName>FxUnits_12_Singleton</ObjectName>
-                                </SingletonContainer>
-                              </Children>
-                              <Connection>
-                                <ConfigKey persist="true">[Skin],show_4effectunits</ConfigKey>
-                                <Transform><Not/></Transform>
-                                <BindProperty>visible</BindProperty>
-                              </Connection>
-                            </WidgetGroup>
-
-                            <SingletonContainer>
-                              <ObjectName>Library_Singleton</ObjectName>
-                            </SingletonContainer>
+                            <Template src="skins:Mingo/pair_column.xml">
+                              <SetVariable name="chanTop">2</SetVariable>
+                              <SetVariable name="chanBottom">4</SetVariable>
+                              <SetVariable name="LabelText">2|4</SetVariable>
+                              <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairB"/></SetVariable>
+                              <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairB"/></SetVariable>
+                            </Template>
 
                           </Children>
-                        </WidgetGroup><!-- Decks + FX + Samplers + Library -->
+                        </WidgetGroup><!-- /deck pair columns -->
+
+                        <SingletonContainer><!-- library pane -->
+                          <ObjectName>Library_Singleton</ObjectName>
+                        </SingletonContainer><!-- /library pane -->
+
                       </Children>
                     </Splitter>
                     <!-- regular library with decks etc. -->
