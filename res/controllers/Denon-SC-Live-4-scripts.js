@@ -2121,9 +2121,8 @@ SCLive4.stemsMode = function(deck, offset) {
     this.ledControl = SCLive4.padMode.HOTCUE;
     this.colorUnMute = SCLive4.rgbCode.blue;
     this.colorMute = SCLive4.rgbCode.blueDark;
-    this.color2UnMute = SCLive4.rgbCode.orange;
-    this.color2Mute = SCLive4.rgbCode.orangeDark;
-    this.colorDisabled = SCLive4.rgbCode.black;
+    this.color2UnMute = SCLive4.rgbCode.red;
+    this.color2Mute = SCLive4.rgbCode.redDark;
     this.pads = new components.ComponentContainer();
     this.groupPrefix = `[Channel${script.deckFromGroup(deck.currentDeck)}_Stem`;
     this.group2Prefix = `[Channel${1 + (script.deckFromGroup(deck.currentDeck) + 1) % 4}_Stem`;
@@ -2141,20 +2140,18 @@ SCLive4.stemsMode = function(deck, offset) {
             off: this.colorUnMute,
             outConnect: false,
         });
-        if (this.paired) {
-            this.pads[i+4] = new components.Button({
-                type: components.Button.prototype.types.powerWindow,
-                group: `${this.group2Prefix}${5 - i}]`,
-                key: "mute",
-                midi: [0x94 + offset, 0x0E + i],
-                sendRGB: function(colorObj) {
-                    midi.sendShortMsg(0x94 + offset, 0x0E + i, SCLive4.paletteFromRGB(colorObj));
-                },
-                on: this.color2Mute,
-                off: this.color2UnMute,
-                outConnect: false,
-            });
-        }
+        this.pads[i+4] = new components.Button({
+            type: components.Button.prototype.types.powerWindow,
+            group: `${this.group2Prefix}${5 - i}]`,
+            key: "mute",
+            midi: [0x94 + offset, 0x0E + i],
+            sendRGB: function(colorObj) {
+                midi.sendShortMsg(0x94 + offset, 0x0E + i, SCLive4.paletteFromRGB(colorObj));
+            },
+            on: this.color2Mute,
+            off: this.color2UnMute,
+            outConnect: false,
+        });
     }
 
     this.onEnter = function() {
@@ -2166,44 +2163,28 @@ SCLive4.stemsMode = function(deck, offset) {
     };
 
     this.onParameter = function(direction, _shifted) {
-        if (this.paired) {
-            if (direction > 0) {
-                // Instrumental here
-                engine.setValue(`${this.groupPrefix}1]`, "mute", 0);
-                engine.setValue(`${this.groupPrefix}2]`, "mute", 0);
-                engine.setValue(`${this.groupPrefix}3]`, "mute", 0);
-                engine.setValue(`${this.groupPrefix}4]`, "mute", 1);
-                // Vocal there
-                engine.setValue(`${this.group2Prefix}1]`, "mute", 1);
-                engine.setValue(`${this.group2Prefix}2]`, "mute", 1);
-                engine.setValue(`${this.group2Prefix}3]`, "mute", 1);
-                engine.setValue(`${this.group2Prefix}4]`, "mute", 0);
-            } else {
-                // Vocal here
-                engine.setValue(`${this.groupPrefix}1]`, "mute", 1);
-                engine.setValue(`${this.groupPrefix}2]`, "mute", 1);
-                engine.setValue(`${this.groupPrefix}3]`, "mute", 1);
-                engine.setValue(`${this.groupPrefix}4]`, "mute", 0);
-                // Instrumental there
-                engine.setValue(`${this.group2Prefix}1]`, "mute", 0);
-                engine.setValue(`${this.group2Prefix}2]`, "mute", 0);
-                engine.setValue(`${this.group2Prefix}3]`, "mute", 0);
-                engine.setValue(`${this.group2Prefix}4]`, "mute", 1);
-            }
-            return;
-        }
         if (direction > 0) {
-            // Instant instrumental
+            // Instrumental here
             engine.setValue(`${this.groupPrefix}1]`, "mute", 0);
             engine.setValue(`${this.groupPrefix}2]`, "mute", 0);
             engine.setValue(`${this.groupPrefix}3]`, "mute", 0);
             engine.setValue(`${this.groupPrefix}4]`, "mute", 1);
+            // Vocal there
+            engine.setValue(`${this.group2Prefix}1]`, "mute", 1);
+            engine.setValue(`${this.group2Prefix}2]`, "mute", 1);
+            engine.setValue(`${this.group2Prefix}3]`, "mute", 1);
+            engine.setValue(`${this.group2Prefix}4]`, "mute", 0);
         } else {
-            // Instant vocal
+            // Vocal here
             engine.setValue(`${this.groupPrefix}1]`, "mute", 1);
             engine.setValue(`${this.groupPrefix}2]`, "mute", 1);
             engine.setValue(`${this.groupPrefix}3]`, "mute", 1);
             engine.setValue(`${this.groupPrefix}4]`, "mute", 0);
+            // Instrumental there
+            engine.setValue(`${this.group2Prefix}1]`, "mute", 0);
+            engine.setValue(`${this.group2Prefix}2]`, "mute", 0);
+            engine.setValue(`${this.group2Prefix}3]`, "mute", 0);
+            engine.setValue(`${this.group2Prefix}4]`, "mute", 1);
         }
     };
 };
@@ -2838,6 +2819,36 @@ SCLive4.masterGain = new components.Pot({
     softTakeover: false,
     inValueScale: offsetPotInValueScale,
 });
+
+SCLive4.boothGain = new components.Pot({
+    group: "[Master]",
+    inKey: "booth_gain",
+    softTakeover: false,
+    inValueScale: offsetPotInValueScale,
+});
+
+SCLive4.mic1Volume = new components.Pot({
+    group: "[Microphone]",
+    inKey: "pregain",
+    softTakeover: false,
+    inValueScale: offsetPotInValueScale,
+});
+
+if (engine.getValue("[Microphone2]", "input_configured")) {
+    SCLive4.mic2Volume = new components.Pot({
+        group: "[Microphone2]",
+        inKey: "pregain",
+        softTakeover: false,
+        inValueScale: offsetPotInValueScale,
+    });
+} else {
+    SCLive4.mic2Volume = new components.Pot({
+        group: "[Auxiliary1]",
+        inKey: "pregain",
+        softTakeover: false,
+        inValueScale: offsetPotInValueScale,
+    });
+}
 
 SCLive4.boothGain = new components.Pot({
     group: "[Master]",
