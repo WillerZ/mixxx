@@ -306,9 +306,10 @@
                       </Connection>
                       <Children>
 
-                        <WidgetGroup><!-- deck pair columns -->
+                        <WidgetGroup><!-- deck pair stack: pairs stacked
+                             full-width, 1|3 above 2|4 -->
                           <ObjectName>MingoPairColumns</ObjectName>
-                          <Layout>horizontal</Layout>
+                          <Layout>vertical</Layout>
                           <SizePolicy>me,me</SizePolicy>
                           <Children>
 
@@ -320,7 +321,7 @@
                               <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairA"/></SetVariable>
                             </Template>
 
-                            <WidgetGroup><Size>4f,1me</Size></WidgetGroup>
+                            <WidgetGroup><Size>1me,4f</Size></WidgetGroup>
 
                             <Template src="skins:Mingo/pair_column.xml">
                               <SetVariable name="chanTop">2</SetVariable>
@@ -331,7 +332,7 @@
                             </Template>
 
                           </Children>
-                        </WidgetGroup><!-- /deck pair columns -->
+                        </WidgetGroup><!-- /deck pair stack -->
 
                         <SingletonContainer><!-- library pane -->
                           <ObjectName>Library_Singleton</ObjectName>

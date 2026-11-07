@@ -1,13 +1,14 @@
 <!--
 Description:
-  Mingo: one deck-pair column — track identity header for the pair,
+  Mingo: one deck-pair row block — track identity header for the pair,
   then a bordered pair box holding one waveform split across the two
   physical decks: the top deck renders its top half, the bottom deck
   its bottom half, zero line at the separator. In lock the pair reads
   as a single waveform; during a slip the other half shows the
   deck's real-time position (snap-back reference). The pair label
   ("1|3") is centred in a gutter spanning both lanes. The one overview
-  the pair shares lives in the header.
+  the pair shares lives in the header. The two pairs stack full-width
+  (1|3 above 2|4) via the MingoPairColumns group in skin.xml.
 Variables:
   chanTop     : lower-numbered deck of the pair (label + header source)
   chanBottom  : higher-numbered deck of the pair
