@@ -30,6 +30,12 @@
       <attribute config_key="[App],num_decks">4</attribute>
       <attribute config_key="[App],num_samplers">16</attribute>
       <attribute persist="true" config_key="[Mingo],colorLogo">1</attribute>
+      <attribute persist="false" config_key="[Mingo],fx_slot_1">1</attribute>
+      <attribute persist="false" config_key="[Mingo],fx_slot_2">0</attribute>
+      <attribute persist="false" config_key="[Mingo],fx_slot_3">0</attribute>
+      <attribute persist="false" config_key="[Mingo],fx_slot_4">0</attribute>
+      <attribute persist="false" config_key="[Mingo],fx_slot_5">0</attribute>
+      <attribute persist="false" config_key="[Mingo],fx_slot_6">0</attribute>
       <!-- Decks -->
       <attribute persist="true" config_key="[Skin],show_4decks">1</attribute>
       <attribute persist="true" config_key="[Skin],show_intro_outro_cues">1</attribute>

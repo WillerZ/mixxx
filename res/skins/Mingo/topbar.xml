@@ -48,20 +48,118 @@ Description:
         </Children>
       </WidgetGroup><!-- /Logo -->
 
-      <WidgetGroup><!-- FX Unit 1 chain preset name -->
+      <WidgetGroup><!-- Beat FX: the current slot's effect name (the SC
+        Live 4 script shows one of these six, per SCLive4.beatFx.slot) -->
         <Layout>horizontal</Layout>
         <Children>
 
           <WidgetGroup><Size>8f,1min</Size></WidgetGroup>
 
-          <EffectChainPresetSelector>
+          <WidgetGroup><!-- Beat FX slot 1: unit 1 effect 1 -->
             <ObjectName>MingoFxPreset</ObjectName>
-            <EffectUnitGroup>[EffectRack1_EffectUnit1]</EffectUnitGroup>
+            <Layout>horizontal</Layout>
             <Size>240f,32f</Size>
-          </EffectChainPresetSelector>
+            <Children>
+              <EffectName>
+                <ObjectName>MingoFxSlot</ObjectName>
+                <EffectUnitGroup>[EffectRack1_EffectUnit1]</EffectUnitGroup>
+                <Effect>1</Effect>
+                <Alignment>left</Alignment>
+              </EffectName>
+            </Children>
+            <Connection>
+              <ConfigKey>[Mingo],fx_slot_1</ConfigKey>
+              <BindProperty>visible</BindProperty>
+            </Connection>
+          </WidgetGroup>
+          <WidgetGroup><!-- Beat FX slot 2: unit 1 effect 2 -->
+            <ObjectName>MingoFxPreset</ObjectName>
+            <Layout>horizontal</Layout>
+            <Size>240f,32f</Size>
+            <Children>
+              <EffectName>
+                <ObjectName>MingoFxSlot</ObjectName>
+                <EffectUnitGroup>[EffectRack1_EffectUnit1]</EffectUnitGroup>
+                <Effect>2</Effect>
+                <Alignment>left</Alignment>
+              </EffectName>
+            </Children>
+            <Connection>
+              <ConfigKey>[Mingo],fx_slot_2</ConfigKey>
+              <BindProperty>visible</BindProperty>
+            </Connection>
+          </WidgetGroup>
+          <WidgetGroup><!-- Beat FX slot 3: unit 1 effect 3 -->
+            <ObjectName>MingoFxPreset</ObjectName>
+            <Layout>horizontal</Layout>
+            <Size>240f,32f</Size>
+            <Children>
+              <EffectName>
+                <ObjectName>MingoFxSlot</ObjectName>
+                <EffectUnitGroup>[EffectRack1_EffectUnit1]</EffectUnitGroup>
+                <Effect>3</Effect>
+                <Alignment>left</Alignment>
+              </EffectName>
+            </Children>
+            <Connection>
+              <ConfigKey>[Mingo],fx_slot_3</ConfigKey>
+              <BindProperty>visible</BindProperty>
+            </Connection>
+          </WidgetGroup>
+          <WidgetGroup><!-- Beat FX slot 4: unit 2 effect 1 -->
+            <ObjectName>MingoFxPreset</ObjectName>
+            <Layout>horizontal</Layout>
+            <Size>240f,32f</Size>
+            <Children>
+              <EffectName>
+                <ObjectName>MingoFxSlot</ObjectName>
+                <EffectUnitGroup>[EffectRack1_EffectUnit2]</EffectUnitGroup>
+                <Effect>1</Effect>
+                <Alignment>left</Alignment>
+              </EffectName>
+            </Children>
+            <Connection>
+              <ConfigKey>[Mingo],fx_slot_4</ConfigKey>
+              <BindProperty>visible</BindProperty>
+            </Connection>
+          </WidgetGroup>
+          <WidgetGroup><!-- Beat FX slot 5: unit 2 effect 2 -->
+            <ObjectName>MingoFxPreset</ObjectName>
+            <Layout>horizontal</Layout>
+            <Size>240f,32f</Size>
+            <Children>
+              <EffectName>
+                <ObjectName>MingoFxSlot</ObjectName>
+                <EffectUnitGroup>[EffectRack1_EffectUnit2]</EffectUnitGroup>
+                <Effect>2</Effect>
+                <Alignment>left</Alignment>
+              </EffectName>
+            </Children>
+            <Connection>
+              <ConfigKey>[Mingo],fx_slot_5</ConfigKey>
+              <BindProperty>visible</BindProperty>
+            </Connection>
+          </WidgetGroup>
+          <WidgetGroup><!-- Beat FX slot 6: unit 2 effect 3 -->
+            <ObjectName>MingoFxPreset</ObjectName>
+            <Layout>horizontal</Layout>
+            <Size>240f,32f</Size>
+            <Children>
+              <EffectName>
+                <ObjectName>MingoFxSlot</ObjectName>
+                <EffectUnitGroup>[EffectRack1_EffectUnit2]</EffectUnitGroup>
+                <Effect>3</Effect>
+                <Alignment>left</Alignment>
+              </EffectName>
+            </Children>
+            <Connection>
+              <ConfigKey>[Mingo],fx_slot_6</ConfigKey>
+              <BindProperty>visible</BindProperty>
+            </Connection>
+          </WidgetGroup>
 
         </Children>
-      </WidgetGroup><!-- /FX Unit 1 chain preset name -->
+      </WidgetGroup><!-- /Beat FX slot name -->
 
       <WidgetGroup><SizePolicy>me,min</SizePolicy></WidgetGroup><!-- spacer -->
 

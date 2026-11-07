@@ -3288,30 +3288,19 @@ WRateRange {
     background-color: #4a4a4a;
     }
 
-  /* FX 1 chain preset name, shown as a wide text button */
-  WEffectChainPresetSelector#MingoFxPreset {
-    font-size: 15px/15px;
-    font-weight: bold;
-    color: #ffffff;
+  /* Beat FX: the current slot's effect name in the topbar. Which of
+     the six is shown comes from [Mingo],fx_slot_N (SC Live 4 script). */
+  #MingoFxPreset {
     background-color: #333;
     border: 1px solid #555;
     border-radius: 3px;
-    padding-left: 6px;
     }
-    WEffectChainPresetSelector#MingoFxPreset:hover {
-      background-color: #3d3d3d;
-      border-color: #777;
+    WEffectName#MingoFxSlot {
+      font-size: 15px/15px;
+      font-weight: bold;
+      color: #ffffff;
+      padding-left: 6px;
       }
-    WEffectChainPresetSelector#MingoFxPreset QAbstractItemView {
-      font-size: 16px;
-      background-color: #262626;
-      color: #ddd;
-      selection-background-color: #444;
-      }
-      WEffectChainPresetSelector#MingoFxPreset QAbstractItemView::item {
-        min-height: 44px;
-        padding-left: 8px;
-        }
 
     /* ================================================================
      * Mingo: library table — touch-sized rows.
