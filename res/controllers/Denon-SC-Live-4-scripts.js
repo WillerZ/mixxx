@@ -734,7 +734,15 @@ SCLive4.init = function(_id, _debug) {
                 this.slot = this.slot % 6 + 1;
                 this.parameter = 1;
                 this.connectLed();
+                this.publishSlot();
                 SCLive4.leftDeck.padGrid.showMeter(this.slot, SCLive4.rgbCode.white);
+            }
+        },
+        // Tell the Mingo skin which slot is current: its topbar shows that
+        // slot's effect name (one visible [Mingo],fx_slot_N out of six).
+        publishSlot: function() {
+            for (let i = 1; i <= 6; i++) {
+                engine.setValue("[Mingo]", `fx_slot_${  i}`, this.slot === i ? 1 : 0);
             }
         },
         assignInput: function(_channel, _control, value) {
@@ -802,6 +810,7 @@ SCLive4.init = function(_id, _debug) {
         engine.setValue(SCLive4.beatFx.slotGroup(slot), "enabled", 0); // start with effects off
     }
     SCLive4.beatFx.connectLed();
+    SCLive4.beatFx.publishSlot();
 
     // FLASHING LIGHTS, as in Engine OS: the selected Sweep FX button flashes
     // while its effect is being applied (any channel's Sweep FX knob turned away
