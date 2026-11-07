@@ -1,25 +1,15 @@
 <!--
-    Mingo * a flat nighttime skin for mixxx
+    Mingo * a touchscreen companion skin for a Denon SC Live 4 standalone
+    build (1280x720 @ ~210 ppi)
 
-    This skin is supposed to be an extension for your controller, in a way that
-    almost all duplicate controls can be removed from screen.
-    Toggle skin settings menu with the gear icon at the top right screen corner
-    to find all options.
+    Mingo shows only what the SC Live 4 control surface cannot: zoomed
+    and scan waveforms for all four decks, track identity (title, artist,
+    key) and the active FX1 chain preset name. Decks are presented as two
+    hard-synced pairs (1+3, 2+4); all performance controls and their
+    readouts (BPM, time, control positions, artwork, spinners) live on
+    the hardware.
 
-    Main focus was to make every control easily and quickly recognizable,
-    especially when your eyes are mostly on your controller and your hands.
-
-    Special feature: Comment row
-    Display first line of track's comment below track overview (read from metadata tag,
-    editable in tracks table or Properties window).
-    How to use:
-    - add your notes on cue points, moods, whatever to the beginning of track comment
-    - for a line break in comment, press <shift> + <enter>
-    - to push down iTunes info and other info irrelevant when playing, insert a blank line:
-      <space> then <shift> + <enter>
-
-    Enjoy!
-
+    See DESIGN.md for the decision record and PLAN.md for the build plan.
 -->
 
 <skin>
@@ -27,7 +17,7 @@
     <title>Mingo</title>
     <author>Phil Willoughby (DJ WillerZ)</author>
     <version>0.1</version>
-    <description>A flexible nighttime skin with stacked waveforms, 4 decks and 16 samplers that can be minimized to the bare essentials.</description>
+    <description>Touchscreen companion display for the Denon SC Live 4: paired-deck waveforms, track identity and FX1 preset name, sized for 1280x720 touch.</description>
     <language>en</language>
     <license>Creative Commons Attribution, Share-Alike 3.0 Unported</license>
 
@@ -43,24 +33,24 @@
       <attribute persist="true" config_key="[Mingo],beatgrid_buttons">0</attribute>
       <attribute persist="true" config_key="[Mingo],colorLogo">0</attribute>
       <!-- Decks -->
-      <attribute persist="true" config_key="[Skin],show_4decks">0</attribute>
+      <attribute persist="true" config_key="[Skin],show_4decks">1</attribute>
       <attribute persist="true" config_key="[Mingo],separate_cue_button">1</attribute>
       <attribute persist="true" config_key="[Mingo],hotcues">0</attribute>
       <attribute persist="true" config_key="[Skin],show_intro_outro_cues">1</attribute>
       <attribute persist="true" config_key="[Skin],show_8_hotcues">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_coverart">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_spinnies">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_big_spinny_coverart">1</attribute>
+      <attribute persist="true" config_key="[Skin],show_coverart">0</attribute>
+      <attribute persist="true" config_key="[Skin],show_spinnies">0</attribute>
+      <attribute persist="true" config_key="[Skin],show_big_spinny_coverart">0</attribute>
       <attribute persist="true" config_key="[Mingo],vinylControlsDeck1">0</attribute>
       <attribute persist="true" config_key="[Mingo],vinylControlsDeck2">0</attribute>
       <attribute persist="true" config_key="[Mingo],vinylControlsDeck3">0</attribute>
       <attribute persist="true" config_key="[Mingo],vinylControlsDeck4">0</attribute>
-      <attribute persist="true" config_key="[Skin],show_rate_controls">1</attribute>
+      <attribute persist="true" config_key="[Skin],show_rate_controls">0</attribute>
       <attribute persist="true" config_key="[Mingo],key_display_match">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_starrating">1</attribute>
+      <attribute persist="true" config_key="[Skin],show_starrating">0</attribute>
       <attribute persist="true" config_key="[Mingo],symmetric_overviews">0</attribute>
       <attribute persist="true" config_key="[Mingo],symmetric_time">0</attribute>
-      <attribute persist="true" config_key="[Mingo],trackComment">1</attribute>
+      <attribute persist="true" config_key="[Mingo],trackComment">0</attribute>
       <attribute persist="true" config_key="[Skin],show_loop_beatjump_controls">0</attribute>
       <attribute persist="true" config_key="[Mingo],decks/loop_sizes">0</attribute>
       <attribute persist="true" config_key="[Mingo],deck_controls_expanded">0</attribute>
@@ -79,7 +69,7 @@
       <attribute persist="true" config_key="[Skin],show_eq_knobs">1</attribute>
       <attribute persist="true" config_key="[Skin],show_eq_kill_buttons">1</attribute>
       <attribute persist="true" config_key="[Skin],show_xfader">1</attribute>
-      <attribute persist="true" config_key="[Mingo],vumeter">1</attribute>
+      <attribute persist="true" config_key="[Mingo],vumeter">0</attribute>
       <!-- Effects -->
       <attribute persist="true" config_key="[Skin],show_effectrack">1</attribute>
       <attribute persist="true" config_key="[Skin],show_4effectunits">0</attribute>
@@ -463,18 +453,6 @@
 
                             <WidgetGroup>
                               <Layout>vertical</Layout>
-                              <SizePolicy>me,min</SizePolicy>
-                              <Children>
-                                <Template src="skins:Mingo/fx_units_34.xml"/>
-                              </Children>
-                              <Connection>
-                                <ConfigKey persist="true">[Skin],show_4effectunits</ConfigKey>
-                                <BindProperty>visible</BindProperty>
-                              </Connection>
-                            </WidgetGroup>
-
-                            <WidgetGroup>
-                              <Layout>vertical</Layout>
                               <Children>
                                 <SingletonContainer>
                                   <ObjectName>FxUnits_12_Singleton</ObjectName>
@@ -486,10 +464,6 @@
                                 <BindProperty>visible</BindProperty>
                               </Connection>
                             </WidgetGroup>
-
-                            <Template src="skins:Mingo/sampler_rack.xml"/>
-
-                            <Template src="skins:Mingo/mic_aux_rack.xml"/>
 
                             <SingletonContainer>
                               <ObjectName>Library_Singleton</ObjectName>
