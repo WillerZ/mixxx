@@ -104,17 +104,20 @@ WaveformWidgetAbstractHandle::WaveformWidgetAbstractHandle()
 WaveformWidgetHolder::WaveformWidgetHolder()
         : m_waveformWidget(nullptr),
           m_waveformViewer(nullptr),
-          m_skinContextCache(UserSettingsPointer(), QString()) {
+          m_skinContextCache(UserSettingsPointer(), QString()),
+          m_waveHalf(WaveHalf::None) {
 }
 
 WaveformWidgetHolder::WaveformWidgetHolder(WaveformWidgetAbstract* waveformWidget,
         WWaveformViewer* waveformViewer,
         const QDomNode& node,
-        const SkinContext& parentContext)
+        const SkinContext& parentContext,
+        WaveHalf waveHalf)
         : m_waveformWidget(waveformWidget),
           m_waveformViewer(waveformViewer),
           m_skinNodeCache(node.cloneNode()),
-          m_skinContextCache(&parentContext) {
+          m_skinContextCache(&parentContext),
+          m_waveHalf(waveHalf) {
 }
 
 ///////////////////////////////////////////
@@ -536,14 +539,38 @@ bool WaveformWidgetFactory::setWaveformWidget(WWaveformViewer* viewer,
         delete viewer->getWaveformWidget();
     }
 
+    // Optional: <WaveHalf>top|bottom</WaveHalf> shows only the top or bottom
+    // half of the waveform (split pair displays). Requires the accelerated
+    // (allshader) backend; degrade to a full waveform with a warning.
+    WaveHalf waveHalf = WaveHalf::None;
+    const QString halfString =
+            parentContext.selectString(node, QStringLiteral("WaveHalf")).toLower();
+    if (!halfString.isEmpty()) {
+        if (halfString == QLatin1String("top")) {
+            waveHalf = WaveHalf::Top;
+        } else if (halfString == QLatin1String("bottom")) {
+            waveHalf = WaveHalf::Bottom;
+        } else {
+            qWarning() << "WaveformWidgetFactory::setWaveformWidget - invalid"
+                       << "<WaveHalf>" << halfString << "- using full waveform";
+        }
+    }
+    if (waveHalf != WaveHalf::None &&
+            getBackendFromConfig() != WaveformWidgetBackend::AllShader) {
+        qWarning() << "WaveformWidgetFactory::setWaveformWidget - <WaveHalf>"
+                   << halfString << "requires the accelerated waveform backend"
+                   << "- using full waveform";
+        waveHalf = WaveHalf::None;
+    }
+
     // Cast to widget done just after creation because it can't be perform in
     // constructor (pure virtual)
-    WaveformWidgetAbstract* waveformWidget = createWaveformWidget(m_type, viewer);
+    WaveformWidgetAbstract* waveformWidget = createWaveformWidget(m_type, viewer, waveHalf);
     viewer->setWaveformWidget(waveformWidget);
     viewer->setup(node, parentContext);
 
     // create new holder
-    WaveformWidgetHolder holder(waveformWidget, viewer, node, &parentContext);
+    WaveformWidgetHolder holder(waveformWidget, viewer, node, &parentContext, waveHalf);
     if (index == -1) {
         // add holder
         m_waveformWidgetHolders.push_back(std::move(holder));
@@ -695,7 +722,8 @@ bool WaveformWidgetFactory::setWidgetTypeFromHandle(int handleIndex, bool force)
         int previousbeatgridAlpha = previousWidget->getBeatGridAlpha();
         delete previousWidget;
         WWaveformViewer* viewer = holder.m_waveformViewer;
-        WaveformWidgetAbstract* widget = createWaveformWidget(m_type, holder.m_waveformViewer);
+        WaveformWidgetAbstract* widget =
+                createWaveformWidget(m_type, holder.m_waveformViewer, holder.m_waveHalf);
         holder.m_waveformWidget = widget;
         viewer->setWaveformWidget(widget);
         viewer->setup(holder.m_skinNodeCache, holder.m_skinContextCache);
@@ -1122,24 +1150,24 @@ void WaveformWidgetFactory::evaluateWidgets() {
 }
 
 WaveformWidgetAbstract* WaveformWidgetFactory::createAllshaderWaveformWidget(
-        WaveformWidgetType::Type type, WWaveformViewer* viewer) {
+        WaveformWidgetType::Type type, WWaveformViewer* viewer, WaveHalf waveHalf) {
     // The stored options may contain flags that are not supported by the
     // current GL context, e.g. HighDetail from a previous desktop OpenGL
     // session when running on OpenGL ES. Mask them out here, so an
     // unsupported renderer like WaveformRendererTextured is never created.
     allshader::WaveformRendererSignalBase::Options options = getWaveformOptions() &
             getWaveformOptionsSupportedByType(type, WaveformWidgetBackend::AllShader);
-    return new allshader::WaveformWidget(viewer, type, viewer->getGroup(), options);
+    return new allshader::WaveformWidget(viewer, type, viewer->getGroup(), options, waveHalf);
 }
 
 WaveformWidgetAbstract* WaveformWidgetFactory::createFilteredWaveformWidget(
-        WWaveformViewer* viewer) {
+        WWaveformViewer* viewer, WaveHalf waveHalf) {
     WaveformWidgetBackend backend = getBackendFromConfig();
 
     switch (backend) {
     case WaveformWidgetBackend::AllShader:
 #ifdef MIXXX_USE_QOPENGL
-        return createAllshaderWaveformWidget(WaveformWidgetType::Type::Filtered, viewer);
+        return createAllshaderWaveformWidget(WaveformWidgetType::Type::Filtered, viewer, waveHalf);
 #endif
     case WaveformWidgetBackend::None:
     case WaveformWidgetBackend::GL:
@@ -1149,13 +1177,14 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createFilteredWaveformWidget(
     }
 }
 
-WaveformWidgetAbstract* WaveformWidgetFactory::createHSVWaveformWidget(WWaveformViewer* viewer) {
+WaveformWidgetAbstract* WaveformWidgetFactory::createHSVWaveformWidget(
+        WWaveformViewer* viewer, WaveHalf waveHalf) {
     WaveformWidgetBackend backend = getBackendFromConfig();
 
     switch (backend) {
     case WaveformWidgetBackend::AllShader:
 #ifdef MIXXX_USE_QOPENGL
-        return createAllshaderWaveformWidget(WaveformWidgetType::HSV, viewer);
+        return createAllshaderWaveformWidget(WaveformWidgetType::HSV, viewer, waveHalf);
 #endif
     case WaveformWidgetBackend::None:
     case WaveformWidgetBackend::GL:
@@ -1165,13 +1194,14 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createHSVWaveformWidget(WWaveform
     }
 }
 
-WaveformWidgetAbstract* WaveformWidgetFactory::createRGBWaveformWidget(WWaveformViewer* viewer) {
+WaveformWidgetAbstract* WaveformWidgetFactory::createRGBWaveformWidget(
+        WWaveformViewer* viewer, WaveHalf waveHalf) {
     WaveformWidgetBackend backend = getBackendFromConfig();
 
     switch (backend) {
     case WaveformWidgetBackend::AllShader:
 #ifdef MIXXX_USE_QOPENGL
-        return createAllshaderWaveformWidget(WaveformWidgetType::Type::RGB, viewer);
+        return createAllshaderWaveformWidget(WaveformWidgetType::Type::RGB, viewer, waveHalf);
 #endif
     case WaveformWidgetBackend::None:
     case WaveformWidgetBackend::GL:
@@ -1182,13 +1212,13 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createRGBWaveformWidget(WWaveform
 }
 
 WaveformWidgetAbstract* WaveformWidgetFactory::createStackedWaveformWidget(
-        WWaveformViewer* viewer) {
+        WWaveformViewer* viewer, WaveHalf waveHalf) {
     WaveformWidgetBackend backend = getBackendFromConfig();
 
     switch (backend) {
     case WaveformWidgetBackend::AllShader:
 #ifdef MIXXX_USE_QOPENGL
-        return createAllshaderWaveformWidget(WaveformWidgetType::Type::Stacked, viewer);
+        return createAllshaderWaveformWidget(WaveformWidgetType::Type::Stacked, viewer, waveHalf);
 #endif
     case WaveformWidgetBackend::None:
     case WaveformWidgetBackend::GL:
@@ -1198,13 +1228,14 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createStackedWaveformWidget(
     }
 }
 
-WaveformWidgetAbstract* WaveformWidgetFactory::createSimpleWaveformWidget(WWaveformViewer* viewer) {
+WaveformWidgetAbstract* WaveformWidgetFactory::createSimpleWaveformWidget(
+        WWaveformViewer* viewer, WaveHalf waveHalf) {
     WaveformWidgetBackend backend = getBackendFromConfig();
 
     switch (backend) {
     case WaveformWidgetBackend::AllShader:
 #ifdef MIXXX_USE_QOPENGL
-        return createAllshaderWaveformWidget(WaveformWidgetType::Type::Simple, viewer);
+        return createAllshaderWaveformWidget(WaveformWidgetType::Type::Simple, viewer, waveHalf);
 #endif
     case WaveformWidgetBackend::None:
     case WaveformWidgetBackend::GL:
@@ -1224,7 +1255,7 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createVSyncTestWaveformWidget(
 }
 
 WaveformWidgetAbstract* WaveformWidgetFactory::createWaveformWidget(
-        WaveformWidgetType::Type type, WWaveformViewer* pViewer) {
+        WaveformWidgetType::Type type, WWaveformViewer* pViewer, WaveHalf waveHalf) {
     WaveformWidgetAbstract* pWidget = nullptr;
     if (pViewer) {
         if (CmdlineArgs::Instance().getSafeMode()) {
@@ -1233,22 +1264,22 @@ WaveformWidgetAbstract* WaveformWidgetFactory::createWaveformWidget(
 
         switch (type) {
         case WaveformWidgetType::Simple:
-            pWidget = createSimpleWaveformWidget(pViewer);
+            pWidget = createSimpleWaveformWidget(pViewer, waveHalf);
             break;
         case WaveformWidgetType::Filtered:
-            pWidget = createFilteredWaveformWidget(pViewer);
+            pWidget = createFilteredWaveformWidget(pViewer, waveHalf);
             break;
         case WaveformWidgetType::HSV:
-            pWidget = createHSVWaveformWidget(pViewer);
+            pWidget = createHSVWaveformWidget(pViewer, waveHalf);
             break;
         case WaveformWidgetType::VSyncTest:
             pWidget = createVSyncTestWaveformWidget(pViewer);
             break;
         case WaveformWidgetType::RGB:
-            pWidget = createRGBWaveformWidget(pViewer);
+            pWidget = createRGBWaveformWidget(pViewer, waveHalf);
             break;
         case WaveformWidgetType::Stacked:
-            pWidget = createStackedWaveformWidget(pViewer);
+            pWidget = createStackedWaveformWidget(pViewer, waveHalf);
             break;
         default:
             pWidget = new EmptyWaveformWidget(pViewer->getGroup(), pViewer);

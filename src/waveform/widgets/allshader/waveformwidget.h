@@ -20,7 +20,8 @@ class allshader::WaveformWidget final : public ::WGLWidget,
     explicit WaveformWidget(QWidget* parent,
             WaveformWidgetType::Type type,
             const QString& group,
-            WaveformRendererSignalBase::Options options);
+            WaveformRendererSignalBase::Options options,
+            WaveHalf waveHalf = WaveHalf::None);
     ~WaveformWidget() override;
 
     WaveformWidgetType::Type getType() const override {
@@ -66,6 +67,7 @@ class allshader::WaveformWidget final : public ::WGLWidget,
             ::WaveformRendererAbstract::PositionSource positionSource);
 
     WaveformWidgetType::Type m_type;
+    WaveHalf m_waveHalf;
     std::unique_ptr<rendergraph::Engine> m_pEngine;
     rendergraph::OpacityNode* m_pOpacityNode;
     WaveformRenderMark* m_pWaveformRenderMark;

@@ -15,7 +15,11 @@ class rendergraph::Engine {
     ~Engine();
 
     void render();
-    void resize(int w, int h);
+    // projYOffset shifts the projection rectangle down by that many world
+    // units, cropping the projection to the band [projYOffset,
+    // projYOffset + h] of a taller virtual scene (used by half-waveform
+    // widgets). Default 0 keeps the full-scene projection.
+    void resize(int w, int h, qreal projYOffset = 0.0);
     void preprocess();
     void add(BaseNode* pNode);
     void remove(BaseNode* pNode);

@@ -95,12 +95,14 @@ class WaveformWidgetHolder {
             WaveformWidgetAbstract* waveformWidget,
             WWaveformViewer* waveformViewer,
             const QDomNode& skinNode,
-            const SkinContext& parentContext);
+            const SkinContext& parentContext,
+            WaveHalf waveHalf);
 
     WaveformWidgetAbstract* m_waveformWidget;
     WWaveformViewer* m_waveformViewer;
     QDomNode m_skinNodeCache;
     SkinContext m_skinContextCache;
+    WaveHalf m_waveHalf;
 
     friend class WaveformWidgetFactory;
 };
@@ -315,9 +317,13 @@ class WaveformWidgetFactory : public QObject,
     template<typename WaveformT>
     QString buildWidgetDisplayName() const;
     WaveformWidgetAbstract* createAllshaderWaveformWidget(
-            WaveformWidgetType::Type type, WWaveformViewer* viewer);
+            WaveformWidgetType::Type type,
+            WWaveformViewer* viewer,
+            WaveHalf waveHalf = WaveHalf::None);
     WaveformWidgetAbstract* createWaveformWidget(
-            WaveformWidgetType::Type type, WWaveformViewer* pViewer);
+            WaveformWidgetType::Type type,
+            WWaveformViewer* pViewer,
+            WaveHalf waveHalf = WaveHalf::None);
     int findIndexOf(WWaveformViewer* viewer) const;
 
     WaveformWidgetType::Type findTypeFromHandleIndex(int index);
@@ -367,11 +373,16 @@ class WaveformWidgetFactory : public QObject,
     VisualsManager* m_pVisualsManager;  // not owned
 
     // TODO(#13245): Migrate the following methods to smart pointer.
-    WaveformWidgetAbstract* createFilteredWaveformWidget(WWaveformViewer* viewer);
-    WaveformWidgetAbstract* createHSVWaveformWidget(WWaveformViewer* viewer);
-    WaveformWidgetAbstract* createRGBWaveformWidget(WWaveformViewer* viewer);
-    WaveformWidgetAbstract* createStackedWaveformWidget(WWaveformViewer* viewer);
-    WaveformWidgetAbstract* createSimpleWaveformWidget(WWaveformViewer* viewer);
+    WaveformWidgetAbstract* createFilteredWaveformWidget(
+            WWaveformViewer* viewer, WaveHalf waveHalf = WaveHalf::None);
+    WaveformWidgetAbstract* createHSVWaveformWidget(
+            WWaveformViewer* viewer, WaveHalf waveHalf = WaveHalf::None);
+    WaveformWidgetAbstract* createRGBWaveformWidget(
+            WWaveformViewer* viewer, WaveHalf waveHalf = WaveHalf::None);
+    WaveformWidgetAbstract* createStackedWaveformWidget(
+            WWaveformViewer* viewer, WaveHalf waveHalf = WaveHalf::None);
+    WaveformWidgetAbstract* createSimpleWaveformWidget(
+            WWaveformViewer* viewer, WaveHalf waveHalf = WaveHalf::None);
     WaveformWidgetAbstract* createVSyncTestWaveformWidget(WWaveformViewer* viewer);
 
     //Debug

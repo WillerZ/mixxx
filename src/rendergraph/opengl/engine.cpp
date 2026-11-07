@@ -76,9 +76,9 @@ void Engine::preprocess() {
     }
 }
 
-void Engine::resize(int w, int h) {
+void Engine::resize(int w, int h, qreal projYOffset) {
     m_matrix.setToIdentity();
-    m_matrix.ortho(QRectF(0.0f, 0.0f, w, h));
+    m_matrix.ortho(QRectF(0.0f, static_cast<float>(projYOffset), w, h));
     // TODO
     // if (waveformRenderer->getOrientation() == Qt::Vertical) {
     //    matrix.rotate(90.f, 0.0f, 0.0f, 1.0f);

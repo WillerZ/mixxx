@@ -25,10 +25,12 @@ namespace allshader {
 WaveformWidget::WaveformWidget(QWidget* parent,
         WaveformWidgetType::Type type,
         const QString& group,
-        WaveformRendererSignalBase::Options options)
+        WaveformRendererSignalBase::Options options,
+        WaveHalf waveHalf)
         : WGLWidget(parent),
           WaveformWidgetAbstract(group),
           m_type(type),
+          m_waveHalf(waveHalf),
           m_pWaveformRenderMarkSlip(nullptr),
           m_pWaveformRendererSignal(nullptr) {
     auto pTopNode = std::make_unique<rendergraph::Node>();
@@ -62,7 +64,11 @@ WaveformWidget::WaveformWidget(QWidget* parent,
 
     // if the added signal renderer supports slip, we add it again, now for
     // slip, together with the other slip renderers
-    if (m_pWaveformRendererSignal && m_pWaveformRendererSignal->supportsSlip()) {
+    // Half-waveform widgets always track the deck's audible play position:
+    // the slip ghost overlay is deliberately not shown (the other half of a
+    // pair display is the snap-back reference).
+    if (m_pWaveformRendererSignal && m_pWaveformRendererSignal->supportsSlip() &&
+            m_waveHalf == WaveHalf::None) {
         // The following renderer will add an overlay waveform if a slip is in progress
         pOpacityNode->appendChildNode(addRendererNode<WaveformRendererSlipMode>());
         pOpacityNode->appendChildNode(
@@ -179,11 +185,20 @@ void WaveformWidget::resizeGL(int w, int h) {
     w = static_cast<int>(std::lround(static_cast<qreal>(w) / devicePixelRatioF()));
     h = static_cast<int>(std::lround(static_cast<qreal>(h) / devicePixelRatioF()));
 
+    // Half-waveform widgets build all renderer geometry for a virtual
+    // double-height scene (so the amplitude is identical to one full
+    // waveform) and let the engine projection crop it to the top or bottom
+    // half: Top keeps virtual [0, h], Bottom keeps [h, 2h] mapped onto the
+    // lane via the projection y-offset.
+    const int virtualHeight = m_waveHalf == WaveHalf::None ? h : 2 * h;
+    const qreal projYOffset = m_waveHalf == WaveHalf::Bottom ? h : 0.0;
+
     // Many allshader components relies on WaveformWidgetRenderer::getWidth and
     // WaveformWidgetRenderer::getHeight to update their rendering stack, so we
     // must resize the renderer first, before updating the rendergraph
-    WaveformWidgetRenderer::resizeRenderer(w, h, static_cast<float>(devicePixelRatio()));
-    m_pEngine->resize(w, h);
+    WaveformWidgetRenderer::resizeRenderer(
+            w, virtualHeight, static_cast<float>(devicePixelRatio()));
+    m_pEngine->resize(w, h, projYOffset);
 }
 
 void WaveformWidget::paintEvent(QPaintEvent* event) {
