@@ -99,6 +99,36 @@ stacked, they read as one waveform sliced horizontally.
   Cue flags (`Align top`) are visible in both lanes as-is.
 - Beat grid and EOT line are vertical spans — clipped by the band, correct.
 
+### Implementation notes (M1–M3, resolves the checklist above)
+
+- No new class: `WaveHalf` is a render mode of `allshader::WaveformWidget`
+  (constructor argument, default `None`), not a clone of the `final` class.
+- Clip mechanism, resolved: the only projection is
+  `rendergraph::Engine::m_matrix` (ortho built in `Engine::resize`;
+  `matrixForWidgetGeometry` is dead code in this tree). Half mode builds
+  geometry for virtual height `2h` (`resizeRenderer(w, 2h, dpr)`) and
+  `Engine::resize` gained a `projYOffset` so the ortho target is the band
+  `[projYOffset, projYOffset + h]`: Top keeps offset 0 (crop at the
+  viewport edge), Bottom maps virtual `[h, 2h]` onto the lane. One
+  uniform, no translation hack, no scissor needed.
+- Virtual-height logic lives in `resizeGL` — the only resize path with a
+  GL context; the public `resizeRenderer` override is a deliberate no-op
+  upstream, so all entry points funnel through it.
+- Play marker is GL, not QPainter, in this backend: a texture of virtual
+  height with the triangle baked at virtual `y = 0`. Result: arrowhead
+  only in the top lane, one continuous play line through both — reads as
+  a single marker across the split. Kept; confirm at 210 ppi.
+- Mark label images are laid out within the virtual-height box, so
+  `Align top` labels (Q, IN, OUT) show in the top lane, `Align bottom`
+  (DefaultMark) in the bottom lane, and VCenter lands on the seam.
+  Loop/intro/outro bands span both lanes and fade at the outer edges —
+  one tinted column across the split. Accepted; tune on device.
+- Odd lane heights are a non-issue: `2h` is always even and the crop
+  boundary is exactly `h` in both ortho and viewport.
+- Skin side shipped with current mark `Align` values; lane proportions
+  (`WaveformSplitter` defaults) untouched until the device session
+  (delete `[Skin],stackedWaveforms_splitSize` from the device cfg first).
+
 ## Skin work (Mingo, M3)
 
 - `pair_column.xml`: pair box = `WaveHalf:top` (chanTop) above
