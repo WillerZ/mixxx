@@ -2154,14 +2154,6 @@ SCLive4.stemsMode = function(deck, offset) {
         });
     }
 
-    this.onEnter = function() {
-        if (!this.paired) {
-            for (let i = 5; i <= 8; i++) {
-                midi.sendShortMsg(0x94 + this.offset, 0x0E + i, SCLive4.paletteFromRGB(this.colorDisabled));
-            }
-        }
-    };
-
     this.onParameter = function(direction, _shifted) {
         if (direction > 0) {
             // Instrumental here
