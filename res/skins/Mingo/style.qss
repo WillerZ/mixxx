@@ -3312,3 +3312,26 @@ WRateRange {
         min-height: 44px;
         padding-left: 8px;
         }
+
+    /* ================================================================
+     * Mingo: library table — touch-sized rows.
+     * The touchscreen is the only pointer, so rows (and their font)
+     * need to clear the 44-48px target. Row height follows the item
+     * min-height; the stylesheet font also drives Mixxx's
+     * setTrackTableFont() minimum section size.
+     * ================================================================ */
+    WTrackTableView {
+      font-size: 18px;
+      }
+    WTrackTableView::item {
+      min-height: 44px;
+      padding-left: 4px;
+      padding-right: 4px;
+      }
+    WTrackTableViewHeader {
+      font-size: 14px;
+      }
+    WTrackTableViewHeader::section {
+      min-height: 30px;
+      padding-left: 4px;
+      }

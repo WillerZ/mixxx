@@ -31,13 +31,12 @@ Variables:
             <Channel><Variable name="chanNum"/></Channel>
           </TrackProperty>
 
-          <TextProperty><!-- Key -->
+          <Key><!-- Key -->
             <ObjectName>MingoTrackKey</ObjectName>
-            <Property>initial_key</Property>
-            <Alignment>right</Alignment>
             <Size>56f,28f</Size>
             <Group><Variable name="group"/></Group>
-          </TextProperty>
+            <DisplayCents>false</DisplayCents>
+          </Key>
 
           <WidgetGroup><Size>4f,1min</Size></WidgetGroup>
         </Children>
