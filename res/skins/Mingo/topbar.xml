@@ -56,7 +56,7 @@ Description:
 
           <EffectChainPresetSelector>
             <ObjectName>MingoFxPreset</ObjectName>
-            <EffectUnit>1</EffectUnit>
+            <EffectUnitGroup>[EffectRack1_EffectUnit1]</EffectUnitGroup>
             <Size>240f,32f</Size>
           </EffectChainPresetSelector>
 
