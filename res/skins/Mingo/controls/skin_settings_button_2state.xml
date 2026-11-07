@@ -10,8 +10,8 @@ Variables:
 <Template>
   <PushButton>
     <ObjectName>SkinSettingsButton</ObjectName>
-    <MinimumSize><Variable name="width"/>,13</MinimumSize>
-    <MaximumSize>182,17</MaximumSize>
+    <MinimumSize><Variable name="width"/>,24</MinimumSize>
+    <MaximumSize>182,30</MaximumSize>
     <SizePolicy>min,me</SizePolicy>
     <NumberStates>2</NumberStates>
     <State>

@@ -29,64 +29,16 @@
       <!-- Set skin defaults. -->
       <attribute config_key="[App],num_decks">4</attribute>
       <attribute config_key="[App],num_samplers">16</attribute>
-      <attribute persist="true" config_key="[Mingo],stacked_waveforms">1</attribute>
-      <attribute persist="true" config_key="[Mingo],beatgrid_buttons">0</attribute>
       <attribute persist="true" config_key="[Mingo],colorLogo">0</attribute>
       <!-- Decks -->
       <attribute persist="true" config_key="[Skin],show_4decks">1</attribute>
-      <attribute persist="true" config_key="[Mingo],separate_cue_button">1</attribute>
-      <attribute persist="true" config_key="[Mingo],hotcues">0</attribute>
       <attribute persist="true" config_key="[Skin],show_intro_outro_cues">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_8_hotcues">1</attribute>
       <attribute persist="true" config_key="[Skin],show_coverart">0</attribute>
       <attribute persist="true" config_key="[Skin],show_spinnies">0</attribute>
-      <attribute persist="true" config_key="[Skin],show_big_spinny_coverart">0</attribute>
-      <attribute persist="true" config_key="[Mingo],vinylControlsDeck1">0</attribute>
-      <attribute persist="true" config_key="[Mingo],vinylControlsDeck2">0</attribute>
-      <attribute persist="true" config_key="[Mingo],vinylControlsDeck3">0</attribute>
-      <attribute persist="true" config_key="[Mingo],vinylControlsDeck4">0</attribute>
-      <attribute persist="true" config_key="[Skin],show_rate_controls">0</attribute>
       <attribute persist="true" config_key="[Mingo],key_display_match">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_starrating">0</attribute>
-      <attribute persist="true" config_key="[Mingo],symmetric_overviews">0</attribute>
-      <attribute persist="true" config_key="[Mingo],symmetric_time">0</attribute>
-      <attribute persist="true" config_key="[Mingo],trackComment">0</attribute>
       <attribute persist="true" config_key="[Skin],show_loop_beatjump_controls">0</attribute>
-      <attribute persist="true" config_key="[Mingo],decks/loop_sizes">0</attribute>
-      <attribute persist="true" config_key="[Mingo],deck_controls_expanded">0</attribute>
-      <attribute persist="true" config_key="[Mingo],always_visible_keylock">1</attribute>
-      <attribute persist="true" config_key="[Mingo],always_visible_eject">0</attribute>
-      <attribute persist="true" config_key="[Mingo],always_visible_slipMode">1</attribute>
-      <attribute persist="true" config_key="[Mingo],always_visible_repeat">0</attribute>
-      <attribute persist="true" config_key="[Mingo],always_visible_orientation">1</attribute>
-      <attribute persist="true" config_key="[Mingo],always_visible_quantize">1</attribute>
-      <attribute persist="true" config_key="[Skin],timing_shift_buttons">0</attribute>
-      <!-- Stem -->
-      <attribute persist="true" config_key="[Skin],show_stem_controls">0</attribute>
-      <!-- Mixer -->
-      <attribute persist="true" config_key="[Skin],show_mixer">0</attribute>
-      <attribute persist="true" config_key="[Mingo],main_mixer">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_eq_knobs">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_eq_kill_buttons">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_xfader">1</attribute>
-      <attribute persist="true" config_key="[Mingo],vumeter">0</attribute>
-      <!-- Effects -->
-      <attribute persist="true" config_key="[Skin],show_effectrack">1</attribute>
-      <attribute persist="true" config_key="[Skin],show_4effectunits">0</attribute>
-      <attribute persist="true" config_key="[Skin],show_superknobs">0</attribute>
-      <!-- Samplers -->
-      <attribute persist="true" config_key="[Skin],show_samplers">0</attribute>
-      <!-- item index in skin_settings_sampler_rows.xml, '1' enables 2 sampler rows -->
-      <attribute persist="true" config_key="[Skin],sampler_rows">1</attribute>
-      <attribute persist="true" config_key="[Skin],sampler_row_1_expanded">0</attribute>
-      <attribute persist="true" config_key="[Skin],sampler_row_2_expanded">0</attribute>
-
-      <attribute persist="true" config_key="[Skin],show_microphones">0</attribute>
-
       <!-- Library -->
       <attribute config_key="[Skin],show_maximized_library">0</attribute>
-      <attribute persist="true" config_key="[Skin],show_preview_decks">0</attribute>
-      <attribute persist="true" config_key="[Skin],show_library_coverart">1</attribute>
       <!--Disable hidden effect routing Buttons-->
       <attribute persist="false" config_key="[EffectRack1_EffectUnit1],group_[MasterOutput]_enable">0</attribute>
       <attribute persist="false" config_key="[EffectRack1_EffectUnit1],group_[BusLeft]_enable">0</attribute>
@@ -271,71 +223,10 @@
       </Children>
     </SingletonDefinition>
 
-    <SingletonDefinition>
-      <ObjectName>VUMeterDeck1</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/mixer/vumeter_single.xml">
-          <SetVariable name="group">[Channel1]</SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
 
-    <SingletonDefinition>
-      <ObjectName>VUMeterDeck2</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/mixer/vumeter_single.xml">
-          <SetVariable name="group">[Channel2]</SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
 
-    <SingletonDefinition>
-      <ObjectName>VUMeterDeck3</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/mixer/vumeter_single.xml">
-          <SetVariable name="group">[Channel3]</SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
 
-    <SingletonDefinition>
-      <ObjectName>VUMeterDeck4</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/mixer/vumeter_single.xml">
-          <SetVariable name="group">[Channel4]</SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
 
-    <SingletonDefinition>
-      <ObjectName>VuMeterMain</ObjectName>
-      <Children>
-        <WidgetGroup>
-          <Layout>vertical</Layout>
-          <SizePolicy>min,me</SizePolicy>
-          <Children>
-            <WidgetGroup><!-- VU incl. Label -->
-              <ObjectName>VUMeterFloating</ObjectName>
-              <Layout>vertical</Layout>
-              <MaximumSize>-1,136</MaximumSize>
-              <SizePolicy>min,me</SizePolicy>
-              <Children>
-                <Template src="skins:Mingo/mixer/vumeter_single.xml">
-                  <SetVariable name="group">[Main]</SetVariable>
-                </Template>
-                <WidgetGroup><Size>0f,5f</Size></WidgetGroup>
-                <WidgetGroup>
-                  <ObjectName>VUMeterLabelMain</ObjectName>
-                  <Size>16f,20f</Size>
-                </WidgetGroup>
-                <WidgetGroup><Size>0f,2f</Size></WidgetGroup>
-              </Children>
-            </WidgetGroup><!-- VU incl. Label -->
-            <WidgetGroup><Size>0f,1me</Size></WidgetGroup>
-          </Children>
-        </WidgetGroup>
-      </Children>
-    </SingletonDefinition>
 
     <SingletonDefinition>
       <ObjectName>Library_Singleton</ObjectName>
@@ -346,19 +237,7 @@
 
     <!-- FX units 1 & 2 show up at different places, depending on the number
     of units enabled (2 or 4). -->
-    <SingletonDefinition>
-      <ObjectName>FxUnits_12_Singleton</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/fx_units_12.xml"/>
-      </Children>
-    </SingletonDefinition>
 
-    <SingletonDefinition>
-      <ObjectName>SamplerSettingsSingleton</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/skin_settings_sampler_rows_16.xml"/>
-      </Children>
-    </SingletonDefinition>
 
 <!--  ##############################################################
       SkinContainer ################################################
@@ -515,9 +394,6 @@
           </Children>
         </WidgetGroup><!-- visible skin + size settings menu -->
 
-        <!-- Detect if Star rating fits into deck buttons row.
-            Do this here, so it doesn't interfere with expanded skin menu -->
-        <Template src="skins:Mingo/helpers/size_detector_stars.xml"/>
 
       </Children>
     </WidgetGroup>

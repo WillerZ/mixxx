@@ -20,7 +20,7 @@ Description:
       <WidgetGroup><!-- Logo -->
         <ObjectName>MixerBar</ObjectName>
         <Layout>horizontal</Layout>
-        <Size>-1me,28f</Size>
+        <Size>-1me,32f</Size>
         <Children>
 
           <WidgetGroup><Size>2f,0min</Size></WidgetGroup>
@@ -56,7 +56,7 @@ Description:
           <EffectChainPresetSelector>
             <ObjectName>MingoFxPreset</ObjectName>
             <EffectUnit>1</EffectUnit>
-            <Size>240f,28f</Size>
+            <Size>240f,32f</Size>
           </EffectChainPresetSelector>
 
         </Children>
@@ -73,20 +73,20 @@ Description:
           <WidgetGroup><!-- Recording button & recording duration label -->
             <ObjectName>RecBox</ObjectName>
             <Layout>stacked</Layout>
-            <Size>70f,20f</Size>
+            <Size>70f,28f</Size>
             <Children>
               <!-- invisible Rec button -->
               <Template src="skins:Mingo/controls/button_3state_display.xml">
                 <SetVariable name="ObjectName">RecButton</SetVariable>
                 <SetVariable name="TooltipId">toggle_recording</SetVariable>
-                <SetVariable name="Size">70f,20f</SetVariable>
+                <SetVariable name="Size">70f,28f</SetVariable>
                 <SetVariable name="ConfigKey">[Recording],toggle_recording</SetVariable>
                 <SetVariable name="ConfigKeyDisp">[Recording],status</SetVariable>
               </Template>
 
               <WidgetGroup><!-- Rec dot + RecDuration -->
                 <Layout>horizontal</Layout>
-                <Size>70f,20f</Size>
+                <Size>70f,28f</Size>
                 <Children>
                   <Template src="skins:Mingo/controls/button_3state_display.xml">
                     <SetVariable name="ObjectName">RecDot</SetVariable>
@@ -100,7 +100,7 @@ Description:
                   </Template>
                   <RecordingDuration>
                     <ObjectName>RecDuration</ObjectName>
-                    <Size>55f,20f</Size>
+                    <Size>55f,28f</Size>
                     <InactiveText>REC</InactiveText>
                     <Alignment>center</Alignment>
                   </RecordingDuration>
@@ -114,7 +114,7 @@ Description:
           <Template src="skins:Mingo/controls/button_5state_display.xml">
             <SetVariable name="TooltipId">broadcast_enabled</SetVariable>
             <SetVariable name="ObjectName">BroadcastButton</SetVariable>
-            <SetVariable name="Size">20f,28f</SetVariable>
+            <SetVariable name="Size">24f,32f</SetVariable>
             <SetVariable name="ConfigKey">[Shoutcast],enabled</SetVariable>
             <SetVariable name="ConfigKeyDisp">[Shoutcast],status</SetVariable>
           </Template>
@@ -182,7 +182,7 @@ Description:
               <PushButton>
                 <TooltipId>skin_settings</TooltipId>
                 <ObjectName>SkinSettingsToggler</ObjectName>
-                <Size>24f,24f</Size>
+                <Size>32f,32f</Size>
                 <NumberStates>2</NumberStates>
                 <State>
                   <Number>0</Number>

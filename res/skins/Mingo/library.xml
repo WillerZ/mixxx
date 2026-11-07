@@ -51,11 +51,11 @@ Description:
                       <WidgetGroup>
                         <ObjectName>AlignTop</ObjectName>
                         <Layout>horizontal</Layout>
-                        <Size>19f,15min</Size>
+                        <Size>28f,24min</Size>
                         <Children>
                           <Template src="skins:Mingo/controls/button_2state_persist.xml">
                             <SetVariable name="ObjectName">LibMiniMaxiButton</SetVariable>
-                            <SetVariable name="Size">19f,15f</SetVariable>
+                            <SetVariable name="Size">28f,24f</SetVariable>
                             <SetVariable name="ConfigKey">[Skin],show_maximized_library</SetVariable>
                           </Template>
                         </Children>

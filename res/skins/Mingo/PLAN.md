@@ -206,3 +206,29 @@ Fallback if 6b stalls: two full waveforms per pair, tightly stacked
 - Q3 → D3: permanent bottom library pane.
 - Q4 → D4: FX Unit 1 only, display-only strip.
 - Q5 (comment row) → dropped per A3 unless revived later.
+
+---
+
+## Build log
+
+- **Phases 1–5 complete.** Headless verification recipe (no display on
+  the build box): seed `/tmp/mcfg` with `[Config] ResizableSkin Mingo`
+  plus a `directories` row in `mixxxdb.sqlite`, then
+  `QT_QPA_PLATFORM=offscreen ./build/mixxx --resource-path res
+  --settings-path /tmp/mcfg --safe-mode --developer` and grep the log
+  for `Skin parsing failed` / `Invalid` — must be empty. (The old
+  `--mixxxcfg` flag above predates 2.6; it is `--settings-path` now.)
+- **Phase 2 fixup:** the deck-header key display used `<TextProperty>`,
+  which the legacy parser silently skips; replaced with the dedicated
+  `<Key>` widget. Skin warnings must be grepped from every smoke run.
+- **Phase 5 outcomes:** dead singleton definitions (VU meters, FX-unit
+  stack, sampler-row settings) and ~40 dead manifest defaults removed;
+  skin settings rewritten as a slim Mingo page (Display / Mini Decks /
+  Branding); topbar chrome (FX preset selector, gear, rec, broadcast)
+  and the library maximise toggle enlarged. The Tango-era template
+  files that nothing references any more (old deck columns, mixer,
+  samplers, size detectors) are kept in-tree for now — no dynamic
+  `src` references exist, so deleting them later is safe but unneeded.
+- **Deferred:** `skin_preview.png` still shows the Tango layout (no
+  way to screenshot the Mixxx GUI headless on this box); Phase 6 split
+  pair waveforms unchanged.
