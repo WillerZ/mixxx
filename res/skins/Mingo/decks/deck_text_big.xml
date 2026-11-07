@@ -1,10 +1,13 @@
 <!--
 Description:
   Mingo: deck-pair header — big title with track key on the right,
-  artist underneath, separated by the track-colour strip. No time,
-  no duration, no BPM (DESIGN.md: not needed).
+  artist underneath, separated by the track-colour strip, then one
+  track overview for the pair (the decks are hard-synced, so a single
+  overview serves both). No time, no duration, no BPM (DESIGN.md: not
+  needed).
 Variables:
-  chanNum : channel number (the pair's lower-numbered, leading deck)
+  chanNum   : channel number (the pair's lower-numbered, leading deck)
+  SignalBgColor / SignalColor : pair colours (overview tint)
 -->
 <Template>
   <SetVariable name="group">[Channel<Variable name="chanNum"/>]</SetVariable>
@@ -74,6 +77,19 @@ Variables:
           <WidgetGroup><Size>4f,1min</Size></WidgetGroup>
         </Children>
       </WidgetGroup><!-- /by Artist -->
+
+      <WidgetGroup><!-- pair overview, tap to scan -->
+        <Layout>vertical</Layout>
+        <SizePolicy>me,min</SizePolicy>
+        <Size>0me,36f</Size>
+        <Children>
+          <Template src="skins:Mingo/decks/overview.xml">
+            <SetVariable name="chanNum"><Variable name="chanNum"/></SetVariable>
+            <SetVariable name="SignalBgColor"><Variable name="SignalBgColor"/></SetVariable>
+            <SetVariable name="SignalColor"><Variable name="SignalColor"/></SetVariable>
+          </Template>
+        </Children>
+      </WidgetGroup>
 
     </Children>
   </WidgetGroup>

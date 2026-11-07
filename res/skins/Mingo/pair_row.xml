@@ -1,8 +1,9 @@
 <!--
 Description:
-  Mingo: one physical deck's scan row — zoomed scrolling waveform over
-  a tap-to-scan track overview. Stacked with its pair sibling by
-  pair_column.xml, which draws the shared deck-label gutter.
+  Mingo: one physical deck's scan row — the zoomed scrolling waveform.
+  The tap-to-scan overview is once per pair, in the header
+  (deck_text_big.xml). Stacked with its pair sibling by pair_column.xml
+  on top of the shared deck-label gutter.
 Variables:
   chanNum   : channel number
   SignalBgColor / SignalColor : pair colours
@@ -22,22 +23,6 @@ Variables:
         <SetVariable name="SignalRGBMidColor"><Variable name="SignalRGBMidColor"/></SetVariable>
         <SetVariable name="SignalRGBHighColor"><Variable name="SignalRGBHighColor"/></SetVariable>
       </Template>
-
-      <WidgetGroup><!-- overview, tap to scan -->
-        <Layout>vertical</Layout>
-        <SizePolicy>me,min</SizePolicy>
-        <Size>0me,36f</Size>
-        <Children>
-          <Template src="skins:Mingo/decks/overview.xml">
-            <SetVariable name="chanNum"><Variable name="chanNum"/></SetVariable>
-            <SetVariable name="SignalBgColor"><Variable name="SignalBgColor"/></SetVariable>
-            <SetVariable name="SignalColor"><Variable name="SignalColor"/></SetVariable>
-            <SetVariable name="SignalRGBLowColor"><Variable name="SignalRGBLowColor"/></SetVariable>
-            <SetVariable name="SignalRGBMidColor"><Variable name="SignalRGBMidColor"/></SetVariable>
-            <SetVariable name="SignalRGBHighColor"><Variable name="SignalRGBHighColor"/></SetVariable>
-          </Template>
-        </Children>
-      </WidgetGroup>
 
     </Children>
   </WidgetGroup>
