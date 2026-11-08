@@ -106,7 +106,7 @@ void WaveformRendererPreroll::preprocess() {
 bool WaveformRendererPreroll::preprocessInner() {
     const TrackPointer trackInfo = m_waveformRenderer->getTrackInfo();
 
-    if (!trackInfo || (m_isSlipRenderer && !m_waveformRenderer->isSlipActive())) {
+    if (m_isSlipRenderer && (!trackInfo || !m_waveformRenderer->isSlipActive())) {
         return false;
     }
 
@@ -119,8 +119,17 @@ bool WaveformRendererPreroll::preprocessInner() {
 
     // Check if the pre- or post-roll is on screen. If so, draw little triangles
     // to indicate the respective zones.
-    const bool preRollVisible = firstDisplayedPosition < 0;
-    const bool postRollVisible = lastDisplayedPosition > 1;
+    bool preRollVisible = firstDisplayedPosition < 0;
+    bool postRollVisible = lastDisplayedPosition > 1;
+    if (!trackInfo) {
+        // No track loaded: treat it as a zero-length track sitting at the
+        // play marker, with preroll to its left and postroll to its right
+        // filling the whole widget. This is the idle state shown before the
+        // first load, and it keeps the render pipeline warm so loading a
+        // track does not stutter on first use.
+        preRollVisible = true;
+        postRollVisible = true;
+    }
     const int numVerticesPerRectangle = 6;
 
     if (!preRollVisible && !postRollVisible) {

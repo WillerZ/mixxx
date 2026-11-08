@@ -155,8 +155,16 @@ mixxx::Duration WaveformWidget::render() {
 }
 
 void WaveformWidget::paintGL() {
-    // opacity of 0.f effectively skips the subtree rendering
-    m_pOpacityNode->setOpacity(shouldOnlyDrawBackground() ? 0.f : 1.f);
+    // Always render the waveform content, even with no track loaded: the
+    // preroll renderer then shows the pre-/post-track triangles with an
+    // empty gap between them. Hiding the whole content subtree while no
+    // track was ready (an opacity of 0.f also skips the children's
+    // preprocessing, so shaders were never compiled) caused a stall on the
+    // first frames after loading a track. Keep the background-only state
+    // only for the brief window where a track is loaded but its samples and
+    // play position are not yet known.
+    const bool trackPending = shouldOnlyDrawBackground() && getTrackInfo();
+    m_pOpacityNode->setOpacity(trackPending ? 0.f : 1.f);
 
     m_pWaveformRenderMark->update();
     m_pWaveformRenderMarkRange->update();
