@@ -118,7 +118,9 @@
     <SetVariable name="PlayedOverlayColor">#99000000</SetVariable>
     <!-- Cyan end-of-track warning -->
     <SetVariable name="EndOfTrackColor">#00ffff</SetVariable>
-    <!-- Mingo: pairs read as one unit — pair 1|3 purple, pair 2|4 blue -->
+    <!-- Mingo: pairs read as one unit — pair 1|3 orange, pair 2|4 cyan.
+         Mini-deck title/artist/key sections and the pair waveform borders
+         and gutter labels resolve their colours from these variables. -->
     <SetVariable name="SignalColor_PairA">#FF9303</SetVariable>
     <SetVariable name="SignalBgColor_PairA">#211203</SetVariable>
     <SetVariable name="SignalColor_PairB">#03EEFF</SetVariable>
@@ -237,9 +239,13 @@
                               <Children>
                                 <Template src="skins:Mingo/decks/deck_left_mini.xml">
                                   <SetVariable name="chanNum">1</SetVariable>
+                                  <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairA"/></SetVariable>
+                                  <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairA"/></SetVariable>
                                 </Template>
                                 <Template src="skins:Mingo/decks/deck_right_mini.xml">
                                   <SetVariable name="chanNum">2</SetVariable>
+                                  <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairB"/></SetVariable>
+                                  <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairB"/></SetVariable>
                                 </Template>
                               </Children>
                             </WidgetGroup><!-- /track info for deck pairs -->
@@ -298,9 +304,13 @@
                           <Children>
                             <Template src="skins:Mingo/decks/deck_left_mini.xml">
                               <SetVariable name="chanNum">1</SetVariable>
+                              <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairA"/></SetVariable>
+                              <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairA"/></SetVariable>
                             </Template>
                             <Template src="skins:Mingo/decks/deck_right_mini.xml">
                               <SetVariable name="chanNum">2</SetVariable>
+                              <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairB"/></SetVariable>
+                              <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairB"/></SetVariable>
                             </Template>
                           </Children>
                         </WidgetGroup>

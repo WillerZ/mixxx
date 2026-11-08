@@ -21,6 +21,9 @@ Variables:
 
       <WidgetGroup>
         <ObjectName>MingoPairBox<Variable name="chanTop"/></ObjectName>
+        <Style>
+          border: 1px solid <Variable name="SignalColor_Pair"/>;
+        </Style>
         <Layout>horizontal</Layout>
         <SizePolicy>me,me</SizePolicy>
         <Children>
@@ -31,6 +34,11 @@ Variables:
             <Children>
               <Label>
                 <ObjectName>MingoWaveLabel<Variable name="chanTop"/></ObjectName>
+                <Style>
+                  WLabel {
+                    color: <Variable name="SignalColor_Pair"/>;
+                  }
+                </Style>
                 <Text><Variable name="LabelText"/></Text>
                 <Alignment>center</Alignment>
                 <Size>44f,1me</Size>

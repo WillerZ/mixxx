@@ -5,6 +5,8 @@ Description:
   | Key | artist | overview |
 Variables:
   chanNum : [ChannelN]
+  SignalColor_Pair / SignalBgColor_Pair : pair colours for the
+      title/artist/key section (set at the Template site)
 -->
 <Template>
   <SetVariable name="group">[Channel<Variable name="chanNum"/>]</SetVariable>
@@ -21,6 +23,17 @@ Variables:
 
           <WidgetGroup>
             <ObjectName>DeckMini_TitlePlayPosKeyBPM</ObjectName>
+            <!-- Pair colours, resolved from the Template site: the section
+                 background is the pair's dark colour, its texts the pair's
+                 signal colour. A widget's own <Style> outranks style.qss. -->
+            <Style>
+              #DeckMini_TitlePlayPosKeyBPM {
+                background-color: <Variable name="SignalBgColor_Pair"/>;
+              }
+              #TrackTitleMini, #KeyDisplay {
+                color: <Variable name="SignalColor_Pair"/>;
+              }
+            </Style>
             <Layout>vertical</Layout>
             <SizePolicy>me,f</SizePolicy>
             <MinimumSize>120,40</MinimumSize>
