@@ -30,7 +30,7 @@ void ColorSchemeParser::setupLegacyColorSchemes(const QDomElement& docElem,
 
         if (pStyle) {
             // read scheme's stylesheet (node text or stylesheet file)
-            *pStyle = LegacySkinParser::getStyleFromNode(schemeNode);
+            *pStyle = LegacySkinParser::getStyleFromNode(schemeNode, pContext);
         }
     } else {
         std::shared_ptr<ImgSource> pImgSrc = std::make_shared<ImgLoader>();

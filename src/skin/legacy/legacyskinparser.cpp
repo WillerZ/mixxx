@@ -340,7 +340,9 @@ QWidget* LegacySkinParser::parseSkin(const QString& skinPath, QWidget* pParent) 
     m_pContext->setSkinBasePath(skinPath);
 
     if (m_pParent) {
-        qDebug() << "ERROR: Somehow a parent already exists -- you are probably re-using a LegacySkinParser which is not advisable!";
+        qDebug()
+                << "ERROR: Somehow a parent already exists -- you are probably "
+                   "reusing a LegacySkinParser which is not advisable!";
     }
     QDomElement skinDocument = openSkin(skinPath);
 
@@ -1753,7 +1755,7 @@ QWidget* LegacySkinParser::parseTableView(const QDomElement& node) {
 }
 
 QString LegacySkinParser::getLibraryStyle(const QDomNode& node) {
-    QString style = getStyleFromNode(node);
+    QString style = getStyleFromNode(node, m_pContext.get());
 
     // Workaround to support legacy color styling
     QColor color(0,0,0);
@@ -2253,7 +2255,8 @@ void LegacySkinParser::setupSize(const QDomNode& node, QWidget* pWidget) {
 }
 
 //static
-QString LegacySkinParser::getStyleFromNode(const QDomNode& node) {
+QString LegacySkinParser::getStyleFromNode(const QDomNode& node,
+        const SkinContext* context) {
     QDomElement styleElement = SkinContext::selectElement(node, "Style");
 
     if (styleElement.isNull()) {
@@ -2324,8 +2327,12 @@ QString LegacySkinParser::getStyleFromNode(const QDomNode& node) {
         }
 #endif
     } else {
-        // If no src attribute, use the node data as text.
-        style = styleElement.text();
+        // If no src attribute, use the node data as text. Use nodeToString
+        // so that <Variable name="..."/> children resolve into the style
+        // text: this lets one template carry per-instance colours passed in
+        // with <SetVariable>.
+        style = context ? context->nodeToString(styleElement)
+                        : styleElement.text();
     }
 
     // Legacy fixes: In Mixxx <1.12.0 we used QGroupBox for WWidgetGroup. Some
@@ -2389,7 +2396,7 @@ void LegacySkinParser::setupWidget(const QDomNode& node,
     }
     setupSize(node, pWidget);
 
-    QString style = getStyleFromNode(node);
+    QString style = getStyleFromNode(node, m_pContext.get());
     // Check if we should apply legacy library styling to this node.
     if (m_pContext->selectBool(node, "LegacyTableViewStyle", false)) {
         style = getLibraryStyle(node);

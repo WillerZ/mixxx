@@ -56,7 +56,7 @@ class LegacySkinParser : public QObject, public SkinParser {
     static Qt::MouseButton parseButtonState(const QDomNode& node,
                                             const SkinContext& context);
 
-    static QString getStyleFromNode(const QDomNode& node);
+    static QString getStyleFromNode(const QDomNode& node, const SkinContext* context);
     static QDomElement openSkin(const QString& skinPath);
 
   private:
