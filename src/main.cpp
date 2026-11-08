@@ -1,5 +1,7 @@
 #include <QApplication>
+#include <QCursor>
 #include <QDir>
+#include <QPixmap>
 #include <QPixmapCache>
 #include <QString>
 #include <QStringList>
@@ -243,6 +245,18 @@ int main(int argc, char * argv[]) {
     applyStyleOverride(&args);
 
     qInfo() << "Selected Qt style:" << QApplication::style()->objectName();
+
+    if (args.getHideCursor()) {
+        // Install a fully transparent cursor as the application-wide override.
+        // The override sits above any cursor a widget selects for itself
+        // (e.g. the waveform's scratch hand), so the cursor stays hidden.
+        QPixmap transparentPixmap(16, 16);
+        transparentPixmap.fill(Qt::transparent);
+
+        QCursor blankCursor(transparentPixmap, 0, 0);
+        QApplication::setOverrideCursor(blankCursor);
+        qInfo() << "Mouse cursor hidden (--hide-cursor)";
+    }
 
 #if defined(Q_OS_WIN)
     if (QApplication::style()->objectName() != "windowsvista") {

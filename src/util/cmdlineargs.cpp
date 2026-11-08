@@ -60,6 +60,7 @@ CmdlineArgs::CmdlineArgs()
           m_safeMode(false),
           m_useLegacyVuMeter(false),
           m_useLegacySpinny(false),
+          m_hideCursor(false),
           m_debugAssertBreak(false),
           m_settingsPathSet(false),
           m_scaleFactor(1.0),
@@ -248,6 +249,14 @@ bool CmdlineArgs::parse(const QStringList& arguments, CmdlineArgs::ParseMode mod
                                       "Use legacy spinny")
                             : QString());
     parser.addOption(enableLegacySpinny);
+
+    const QCommandLineOption hideCursor(QStringLiteral("hide-cursor"),
+            forUserFeedback ? QCoreApplication::translate("CmdlineArgs",
+                                      "Hide the mouse cursor: a transparent override cursor "
+                                      "is installed at startup for the whole session. Useful "
+                                      "on touchscreen or kiosk setups.")
+                            : QString());
+    parser.addOption(hideCursor);
 
     const QCommandLineOption controllerDebug(QStringLiteral("controller-debug"),
             forUserFeedback ? QCoreApplication::translate("CmdlineArgs",
@@ -453,6 +462,7 @@ bool CmdlineArgs::parse(const QStringList& arguments, CmdlineArgs::ParseMode mod
 
     m_useLegacyVuMeter = parser.isSet(enableLegacyVuMeter);
     m_useLegacySpinny = parser.isSet(enableLegacySpinny);
+    m_hideCursor = parser.isSet(hideCursor);
     m_controllerDebug = parser.isSet(controllerDebug) || parser.isSet(controllerDebugDeprecated);
     m_controllerPreviewScreens = parser.isSet(controllerPreviewScreens);
     m_controllerAbortOnWarning = parser.isSet(controllerAbortOnWarning);

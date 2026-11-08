@@ -61,6 +61,9 @@ class CmdlineArgs final {
     bool getUseLegacySpinny() const {
         return m_useLegacySpinny;
     }
+    bool getHideCursor() const {
+        return m_hideCursor;
+    }
     bool getDebugAssertBreak() const { return m_debugAssertBreak; }
     bool getSettingsPathSet() const { return m_settingsPathSet; }
     mixxx::LogLevel getLogLevel() const { return m_logLevel; }
@@ -110,6 +113,7 @@ class CmdlineArgs final {
     bool m_safeMode;
     bool m_useLegacyVuMeter;
     bool m_useLegacySpinny;
+    bool m_hideCursor; // hide the mouse cursor from startup
     bool m_debugAssertBreak;
     bool m_settingsPathSet; // has --settingsPath been set on command line ?
     double m_scaleFactor;
