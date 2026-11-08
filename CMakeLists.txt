@@ -1637,6 +1637,7 @@ add_library(
   src/util/tapfilter.cpp
   src/util/task.cpp
   src/util/taskmonitor.cpp
+  src/util/threadpin.cpp
   src/util/time.cpp
   src/util/timer.cpp
   src/util/valuetransformer.cpp
@@ -1914,6 +1915,7 @@ set(
   src/util/taskmonitor.h
   src/util/thread_affinity.h
   src/util/thread_annotations.h
+  src/util/threadpin.h
   src/util/time.h
   src/util/timer.h
   src/util/trace.h

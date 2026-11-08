@@ -58,6 +58,7 @@
 #include "util/logger.h"
 #include "util/screensavermanager.h"
 #include "util/statsmanager.h"
+#include "util/threadpin.h"
 #include "util/time.h"
 #include "util/translations.h"
 #include "util/versionstore.h"
@@ -506,6 +507,12 @@ void CoreServices::initialize(QApplication* pApp) {
 #endif
 
     UserSettingsPointer pConfig = m_pSettingsManager->settings();
+
+    // Pin threads to CPU cores according to the [ThreadPin] configuration
+    // before the engine, sound IO, controller and worker threads get going.
+    // Without configuration this leaves every thread free to run anywhere.
+    m_pThreadPin = std::make_unique<ThreadPin>(pConfig);
+    m_pThreadPin->start();
 
     Sandbox::setPermissionsFilePath(QDir(pConfig->getSettingsPath()).filePath("sandbox.cfg"));
 
