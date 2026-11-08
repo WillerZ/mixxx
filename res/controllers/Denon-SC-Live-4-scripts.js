@@ -2144,9 +2144,9 @@ SCLive4.stemsMode = function(deck, offset) {
             type: components.Button.prototype.types.powerWindow,
             group: `${this.group2Prefix}${5 - i}]`,
             key: "mute",
-            midi: [0x94 + offset, 0x0E + i],
+            midi: [0x94 + offset, 0x0E + 4 + i],
             sendRGB: function(colorObj) {
-                midi.sendShortMsg(0x94 + offset, 0x0E + i, SCLive4.paletteFromRGB(colorObj));
+                midi.sendShortMsg(0x94 + offset, 0x0E + 4 + i, SCLive4.paletteFromRGB(colorObj));
             },
             on: this.color2Mute,
             off: this.color2UnMute,
