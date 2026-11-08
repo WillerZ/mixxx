@@ -132,7 +132,6 @@
     </settings>
     <controller id="denonsclive4">
         <scriptfiles>
-            <file filename="lodash.mixxx.js"/>
             <file filename="midi-components-0.0.js"/>
             <file filename="Denon-SC-Live-4-scripts.js" functionprefix="SCLive4"/>
         </scriptfiles>

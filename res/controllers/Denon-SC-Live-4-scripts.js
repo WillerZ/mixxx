@@ -422,6 +422,108 @@ SCLive4.showDeckNumbers = function() {
     SCLive4.jogNumbers.forget(); // the deck may have changed: resend BPM and time
 };
 
+// All components contained in each mixer strip
+const mixerStrip = function(deckNumber, midiOffset) {
+    components.Deck.call(this, deckNumber);
+
+    // Gain Knob
+    this.gain = new components.Pot({
+        midi: [0xB0 + midiOffset, 0x03],
+        group: `[Channel${deckNumber}]`,
+        inKey: "pregain",
+        inValueScale: offsetPotInValueScale,
+    });
+
+    // High EQ Knob
+    this.eqHigh = new components.Pot({
+        midi: [0xB0 + midiOffset, 0x04],
+        group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
+        inKey: "parameter3",
+    });
+
+    // Mid EQ Knob
+    this.eqMid = new components.Pot({
+        midi: [0xB0 + midiOffset, 0x06],
+        group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
+        inKey: "parameter2",
+    });
+
+    // Low EQ Knob
+    this.eqLow = new components.Pot({
+        midi: [0xB0 + midiOffset, 0x08],
+        group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
+        inKey: "parameter1",
+    });
+
+    // VU Meters (lights and levels: see SCLive4.meterMask)
+    this.vuMeter = new components.Component({
+        midi: [0xB0 + midiOffset, 0x0A],
+        group: `[Channel${deckNumber}]`,
+        outKey: "vu_meter",
+        output: function(value, group) {
+            this.send(SCLive4.meterMask(value, engine.getValue(group, "peak_indicator") === 1));
+        },
+    });
+
+    // Sweep FX knob: shapes the channel's Sweep FX (chosen with the Sweep FX
+    // buttons, see SCLive4.shapeSweepFx). Remembers its position so switching
+    // Sweep FX applies it straight away.
+    this.filterKnob = new components.Pot({
+        midi: [0xB0 + midiOffset, 0x0B],
+        group: `[QuickEffectRack1_[Channel${deckNumber}]]`,
+        inKey: "super1",
+        input: function(_channel, _control, value, _status, _group) {
+            this.lastValue = this.inValueScale(value);
+            SCLive4.shapeSweepFx(deckNumber, this.lastValue);
+        },
+    });
+
+    // PFL Button
+    this.headphoneCue = new components.Button({
+        midi: [0x90 + midiOffset, 0x0D],
+        key: "pfl",
+        type: components.Button.prototype.types.toggle,
+        // SC Live 4 cue LEDs are plain on/off; the Prime 4's "dark" color
+        // values still show as lit on most channels.
+        on: 0x7F,
+        off: 0x00,
+    });
+
+    // Volume Fader. No soft takeover: the SC Live 4 can't report fader
+    // positions at startup, so any fader movement should take effect at once.
+    this.volumeFader = new components.Pot({
+        midi: [0x90 + midiOffset, 0x0E],
+        inKey: "volume",
+        softTakeover: false,
+        input: function(channel, control, value, status, group) {
+            const newValue = this.inValueScale(value);
+            const oldValue = this.lastValue !== undefined ? this.lastValue : engine.getParameter(this.group, "volume");
+            this.lastValue = newValue; // physical fader position
+            if (SCLive4.faderEcho.fader(deckNumber, newValue, oldValue)) {
+                return; // Fader Echo is holding this channel open
+            }
+            components.Pot.prototype.input.call(this, channel, control, value, status, group);
+        },
+    });
+
+    // Crossfader Assign Switch
+    this.xFaderSwitch = new components.Button({
+        midi: [0x90 + midiOffset, 0x0F],
+        inKey: "orientation",
+        input: function(_channel, _control, value, _status, _group) {
+            this.inSetValue(value);
+        },
+    });
+
+    this.reconnectComponents(function(c) {
+        if (c.group === undefined) {
+            c.group = this.currentDeck;
+        }
+    });
+};
+
+mixerStrip.prototype = new components.Deck();
+
 SCLive4.init = function(_id, _debug) {
     // Turn off all LEDs
     midi.sendShortMsg(0x90, 0x75, 0x00);
@@ -441,7 +543,7 @@ SCLive4.init = function(_id, _debug) {
     ];
 
     // Disconnect all decks at first so they don't fight with each other
-    decks.forEach(deck => deck.forEachComponent(comp => comp.disconnect()));
+    // decks.forEach(deck => deck.forEachComponent(comp => comp.disconnect()));
 
     // Assign each console deck to Mixxx decks 1 and 2 on startup
     SCLive4.leftDeck = decks[0];
@@ -1048,108 +1150,6 @@ SCLive4.shutdown = function() {
     });
 
 };
-
-// All components contained in each mixer strip
-const mixerStrip = function(deckNumber, midiOffset) {
-    components.Deck.call(this, deckNumber);
-
-    // Gain Knob
-    this.gain = new components.Pot({
-        midi: [0xB0 + midiOffset, 0x03],
-        group: `[Channel${deckNumber}]`,
-        inKey: "pregain",
-        inValueScale: offsetPotInValueScale,
-    });
-
-    // High EQ Knob
-    this.eqHigh = new components.Pot({
-        midi: [0xB0 + midiOffset, 0x04],
-        group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
-        inKey: "parameter3",
-    });
-
-    // Mid EQ Knob
-    this.eqMid = new components.Pot({
-        midi: [0xB0 + midiOffset, 0x06],
-        group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
-        inKey: "parameter2",
-    });
-
-    // Low EQ Knob
-    this.eqLow = new components.Pot({
-        midi: [0xB0 + midiOffset, 0x08],
-        group: `[EqualizerRack1_[Channel${deckNumber}]_Effect1]`,
-        inKey: "parameter1",
-    });
-
-    // VU Meters (lights and levels: see SCLive4.meterMask)
-    this.vuMeter = new components.Component({
-        midi: [0xB0 + midiOffset, 0x0A],
-        group: `[Channel${deckNumber}]`,
-        outKey: "vu_meter",
-        output: function(value, group) {
-            this.send(SCLive4.meterMask(value, engine.getValue(group, "peak_indicator") === 1));
-        },
-    });
-
-    // Sweep FX knob: shapes the channel's Sweep FX (chosen with the Sweep FX
-    // buttons, see SCLive4.shapeSweepFx). Remembers its position so switching
-    // Sweep FX applies it straight away.
-    this.filterKnob = new components.Pot({
-        midi: [0xB0 + midiOffset, 0x0B],
-        group: `[QuickEffectRack1_[Channel${deckNumber}]]`,
-        inKey: "super1",
-        input: function(_channel, _control, value, _status, _group) {
-            this.lastValue = this.inValueScale(value);
-            SCLive4.shapeSweepFx(deckNumber, this.lastValue);
-        },
-    });
-
-    // PFL Button
-    this.headphoneCue = new components.Button({
-        midi: [0x90 + midiOffset, 0x0D],
-        key: "pfl",
-        type: components.Button.prototype.types.toggle,
-        // SC Live 4 cue LEDs are plain on/off; the Prime 4's "dark" color
-        // values still show as lit on most channels.
-        on: 0x7F,
-        off: 0x00,
-    });
-
-    // Volume Fader. No soft takeover: the SC Live 4 can't report fader
-    // positions at startup, so any fader movement should take effect at once.
-    this.volumeFader = new components.Pot({
-        midi: [0x90 + midiOffset, 0x0E],
-        inKey: "volume",
-        softTakeover: false,
-        input: function(channel, control, value, status, group) {
-            const newValue = this.inValueScale(value);
-            const oldValue = this.lastValue !== undefined ? this.lastValue : engine.getParameter(this.group, "volume");
-            this.lastValue = newValue; // physical fader position
-            if (SCLive4.faderEcho.fader(deckNumber, newValue, oldValue)) {
-                return; // Fader Echo is holding this channel open
-            }
-            components.Pot.prototype.input.call(this, channel, control, value, status, group);
-        },
-    });
-
-    // Crossfader Assign Switch
-    this.xFaderSwitch = new components.Button({
-        midi: [0x90 + midiOffset, 0x0F],
-        inKey: "orientation",
-        input: function(_channel, _control, value, _status, _group) {
-            this.inSetValue(value);
-        },
-    });
-
-    this.reconnectComponents(function(c) {
-        if (c.group === undefined) {
-            c.group = this.currentDeck;
-        }
-    });
-};
-
-mixerStrip.prototype = new components.Deck();
 
 // All components contained on each deck
 SCLive4.Deck = function(deckNumbers, midiChannel) {
