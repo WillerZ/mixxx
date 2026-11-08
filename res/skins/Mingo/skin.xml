@@ -4,7 +4,7 @@
 
     Mingo shows only what the SC Live 4 control surface cannot: zoomed
     and scan waveforms for all four decks, track identity (title, artist,
-    key) and the active FX1 chain preset name. Decks are presented as two
+    key) and the active beat FX preset name. Decks are presented as two
     hard-synced pairs (1+3, 2+4); all performance controls and their
     readouts (BPM, time, control positions, artwork, spinners) live on
     the hardware.
@@ -17,7 +17,7 @@
     <title>Mingo</title>
     <author>Phil Willoughby (DJ WillerZ)</author>
     <version>0.1</version>
-    <description>Touchscreen companion display for the Denon SC Live 4: paired-deck waveforms, track identity and FX1 preset name, sized for 1280x720 touch.</description>
+    <description>Touchscreen companion display for the Denon SC Live 4: paired-deck waveforms, track identity and beat FX preset name, sized for 1280x720 touch.</description>
     <language>en</language>
     <license>Creative Commons Attribution, Share-Alike 3.0 Unported</license>
 
@@ -150,8 +150,8 @@
       <Children>
         <Template src="skins:Mingo/decks/overview.xml">
           <SetVariable name="chanNum">1</SetVariable>
-          <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_12"/></SetVariable>
-          <SetVariable name="SignalColor"><Variable name="SignalColor_12"/></SetVariable>
+          <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_PairA"/></SetVariable>
+          <SetVariable name="SignalColor"><Variable name="SignalColor_PairA"/></SetVariable>
         </Template>
       </Children>
     </SingletonDefinition>
@@ -161,78 +161,11 @@
       <Children>
         <Template src="skins:Mingo/decks/overview.xml">
           <SetVariable name="chanNum">2</SetVariable>
-          <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_12"/></SetVariable>
-          <SetVariable name="SignalColor"><Variable name="SignalColor_12"/></SetVariable>
+          <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_PairB"/></SetVariable>
+          <SetVariable name="SignalColor"><Variable name="SignalColor_PairB"/></SetVariable>
         </Template>
       </Children>
     </SingletonDefinition>
-
-    <SingletonDefinition>
-      <ObjectName>DeckOverviewSingleton3</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/decks/overview.xml">
-          <SetVariable name="chanNum">3</SetVariable>
-          <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_34"/></SetVariable>
-          <SetVariable name="SignalColor"><Variable name="SignalColor_34"/></SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
-
-    <SingletonDefinition>
-      <ObjectName>DeckOverviewSingleton4</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/decks/overview.xml">
-          <SetVariable name="chanNum">4</SetVariable>
-          <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_34"/></SetVariable>
-          <SetVariable name="SignalColor"><Variable name="SignalColor_34"/></SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
-
-    <SingletonDefinition>
-      <ObjectName>SpinnyCoverMini_Singleton1</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/decks/spinny_cover_mini.xml">
-          <SetVariable name="chanNum">1</SetVariable>
-          <SetVariable name="SpinnyCoverColor"><Variable name="SpinnyCoverColor_12"/></SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
-
-    <SingletonDefinition>
-      <ObjectName>SpinnyCoverMini_Singleton2</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/decks/spinny_cover_mini.xml">
-          <SetVariable name="chanNum">2</SetVariable>
-          <SetVariable name="SpinnyCoverColor"><Variable name="SpinnyCoverColor_12"/></SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
-
-    <SingletonDefinition>
-      <ObjectName>SpinnyCoverMini_Singleton3</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/decks/spinny_cover_mini.xml">
-          <SetVariable name="chanNum">3</SetVariable>
-          <SetVariable name="SpinnyCoverColor"><Variable name="SpinnyCoverColor_34"/></SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
-
-    <SingletonDefinition>
-      <ObjectName>SpinnyCoverMini_Singleton4</ObjectName>
-      <Children>
-        <Template src="skins:Mingo/decks/spinny_cover_mini.xml">
-          <SetVariable name="chanNum">4</SetVariable>
-          <SetVariable name="SpinnyCoverColor"><Variable name="SpinnyCoverColor_34"/></SetVariable>
-        </Template>
-      </Children>
-    </SingletonDefinition>
-
-
-
-
-
 
     <SingletonDefinition>
       <ObjectName>Library_Singleton</ObjectName>
@@ -306,33 +239,54 @@
                       </Connection>
                       <Children>
 
-                        <WidgetGroup><!-- deck pair stack: pairs stacked
-                             full-width, 1|3 above 2|4 -->
+                      <WidgetGroup><!-- decks -->
                           <ObjectName>MingoPairColumns</ObjectName>
                           <Layout>vertical</Layout>
-                          <SizePolicy>me,me</SizePolicy>
+                          <SizePolicy>me,max</SizePolicy>
                           <Children>
+                            <WidgetGroup><!-- track info for deck pairs -->
+                              <ObjectName>MingoPairColumns</ObjectName>
+                              <Layout>horizontal</Layout>
+                              <SizePolicy>me,me</SizePolicy>
+                              <Children>
+                                <Template src="skins:Mingo/decks/deck_left_mini.xml">
+                                  <SetVariable name="chanNum">1</SetVariable>
+                                </Template>
+                                <Template src="skins:Mingo/decks/deck_right_mini.xml">
+                                  <SetVariable name="chanNum">2</SetVariable>
+                                </Template>
+                              </Children>
+                            </WidgetGroup><!-- /track info for deck pairs -->
 
-                            <Template src="skins:Mingo/pair_column.xml">
-                              <SetVariable name="chanTop">1</SetVariable>
-                              <SetVariable name="chanBottom">3</SetVariable>
-                              <SetVariable name="LabelText">1|3</SetVariable>
-                              <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairA"/></SetVariable>
-                              <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairA"/></SetVariable>
-                            </Template>
+                            <WidgetGroup><!-- waveform pair stack: pairs stacked
+                                full-width, 1|3 above 2|4 -->
+                              <ObjectName>MingoPairColumns</ObjectName>
+                              <Layout>vertical</Layout>
+                              <SizePolicy>me,me</SizePolicy>
+                              <Children>
 
-                            <WidgetGroup><Size>1me,4f</Size></WidgetGroup>
+                                <Template src="skins:Mingo/deck_pair_waveform.xml">
+                                  <SetVariable name="chanTop">1</SetVariable>
+                                  <SetVariable name="chanBottom">3</SetVariable>
+                                  <SetVariable name="LabelText">1|3</SetVariable>
+                                  <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairA"/></SetVariable>
+                                  <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairA"/></SetVariable>
+                                </Template>
 
-                            <Template src="skins:Mingo/pair_column.xml">
-                              <SetVariable name="chanTop">2</SetVariable>
-                              <SetVariable name="chanBottom">4</SetVariable>
-                              <SetVariable name="LabelText">2|4</SetVariable>
-                              <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairB"/></SetVariable>
-                              <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairB"/></SetVariable>
-                            </Template>
+                                <WidgetGroup><Size>1me,4f</Size></WidgetGroup>
 
+                                <Template src="skins:Mingo/deck_pair_waveform.xml">
+                                  <SetVariable name="chanTop">2</SetVariable>
+                                  <SetVariable name="chanBottom">4</SetVariable>
+                                  <SetVariable name="LabelText">2|4</SetVariable>
+                                  <SetVariable name="SignalColor_Pair"><Variable name="SignalColor_PairB"/></SetVariable>
+                                  <SetVariable name="SignalBgColor_Pair"><Variable name="SignalBgColor_PairB"/></SetVariable>
+                                </Template>
+
+                              </Children>
+                            </WidgetGroup><!-- /waveform pair stack -->
                           </Children>
-                        </WidgetGroup><!-- /deck pair stack -->
+                        </WidgetGroup><!-- /decks -->
 
                         <SingletonContainer><!-- library pane -->
                           <ObjectName>Library_Singleton</ObjectName>
@@ -363,23 +317,6 @@
                               <SetVariable name="chanNum">2</SetVariable>
                             </Template>
                           </Children>
-                        </WidgetGroup>
-
-                        <WidgetGroup><!-- Minimal decks 3/4 -->
-                          <Layout>horizontal</Layout>
-                          <SizePolicy>me,max</SizePolicy>
-                          <Children>
-                            <Template src="skins:Mingo/decks/deck_left_mini.xml">
-                              <SetVariable name="chanNum">3</SetVariable>
-                            </Template>
-                            <Template src="skins:Mingo/decks/deck_right_mini.xml">
-                              <SetVariable name="chanNum">4</SetVariable>
-                            </Template>
-                          </Children>
-                          <Connection>
-                            <ConfigKey>[Skin],show_4decks</ConfigKey>
-                            <BindProperty>visible</BindProperty>
-                          </Connection>
                         </WidgetGroup>
 
                         <SingletonContainer>

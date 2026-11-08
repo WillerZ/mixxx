@@ -1,14 +1,11 @@
 <!--
 Description:
-  Mingo: one deck-pair row block — track identity header for the pair,
-  then a bordered pair box holding one waveform split across the two
+  Mingo: a bordered pair box holding one waveform split across the two
   physical decks: the top deck renders its top half, the bottom deck
   its bottom half, zero line at the separator. In lock the pair reads
   as a single waveform; during a slip the other half shows the
   deck's real-time position (snap-back reference). The pair label
-  ("1|3") is centred in a gutter spanning both lanes. The one overview
-  the pair shares lives in the header. The two pairs stack full-width
-  (1|3 above 2|4) via the MingoPairColumns group in skin.xml.
+  ("1|3") is centred in a gutter spanning both lanes.
 Variables:
   chanTop     : lower-numbered deck of the pair (label + header source)
   chanBottom  : higher-numbered deck of the pair
@@ -17,18 +14,12 @@ Variables:
 -->
 <Template>
   <WidgetGroup>
-    <ObjectName>MingoPairColumn</ObjectName>
+    <ObjectName>MingoDeckPairWaveform</ObjectName>
     <Layout>vertical</Layout>
     <SizePolicy>me,me</SizePolicy>
     <Children>
 
-      <Template src="skins:Mingo/decks/deck_text_big.xml">
-        <SetVariable name="chanNum"><Variable name="chanTop"/></SetVariable>
-        <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
-        <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
-      </Template>
-
-      <WidgetGroup><!-- pair box: label gutter + stacked pair rows -->
+      <WidgetGroup>
         <ObjectName>MingoPairBox<Variable name="chanTop"/></ObjectName>
         <Layout>horizontal</Layout>
         <SizePolicy>me,me</SizePolicy>
@@ -83,7 +74,7 @@ Variables:
           </WidgetGroup>
 
         </Children>
-      </WidgetGroup><!-- /pair box -->
+      </WidgetGroup>
 
     </Children>
   </WidgetGroup>
