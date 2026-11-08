@@ -116,27 +116,17 @@
       Put these variable definitions at the beginning in order to have
       have all variables available for SingletonDefinitions -->
 
-<!--  Knob range in degrees. Values beyond -150/150 might interfere with some knob labels -->
-    <SetVariable name="PotiMinAngle">-130</SetVariable>
-    <SetVariable name="PotiMaxAngle">130</SetVariable>
-
     <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
     <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
     <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
     <SetVariable name="PlayedOverlayColor">#99000000</SetVariable>
     <!-- Cyan end-of-track warning -->
     <SetVariable name="EndOfTrackColor">#00ffff</SetVariable>
-    <SetVariable name="SignalColor_12">#DF4DF0</SetVariable>
-    <SetVariable name="SignalBgColor_12">#3A0440</SetVariable>
-    <SetVariable name="SignalColor_34">#5EBAFF</SetVariable>
-    <SetVariable name="SignalBgColor_34">#19260B</SetVariable>
     <!-- Mingo: pairs read as one unit — pair 1|3 purple, pair 2|4 blue -->
     <SetVariable name="SignalColor_PairA">#DF4DF0</SetVariable>
     <SetVariable name="SignalBgColor_PairA">#3A0440</SetVariable>
     <SetVariable name="SignalColor_PairB">#5EBAFF</SetVariable>
     <SetVariable name="SignalBgColor_PairB">#0B1E26</SetVariable>
-    <SetVariable name="SpinnyCoverColor_12">purple</SetVariable>
-    <SetVariable name="SpinnyCoverColor_34">green</SetVariable>
     <!-- Signal color for waveform overview in decks 1/2, preview deck, samplers and library -->
     <SetVariable name="SignalColor">#bababa</SetVariable>
 
