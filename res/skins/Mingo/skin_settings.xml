@@ -58,11 +58,6 @@ Description:
           </Label>
 
           <Template src="skins:Mingo/controls/skin_settings_button_2state.xml">
-            <SetVariable name="text">4 Decks</SetVariable>
-            <SetVariable name="Setting">[Skin],show_4decks</SetVariable>
-          </Template>
-
-          <Template src="skins:Mingo/controls/skin_settings_button_2state.xml">
             <SetVariable name="text">Maximized Library</SetVariable>
             <SetVariable name="Setting">[Skin],show_maximized_library</SetVariable>
           </Template>
@@ -83,16 +78,6 @@ Description:
             <Text>Mini Decks (maximized library)</Text>
             <Size>182me,21f</Size>
           </Label>
-
-          <Template src="skins:Mingo/controls/skin_settings_button_2state.xml">
-            <SetVariable name="text">Cover Art</SetVariable>
-            <SetVariable name="Setting">[Skin],show_coverart</SetVariable>
-          </Template>
-
-          <Template src="skins:Mingo/controls/skin_settings_button_2state.xml">
-            <SetVariable name="text">Spinners</SetVariable>
-            <SetVariable name="Setting">[Skin],show_spinnies</SetVariable>
-          </Template>
 
           <Template src="skins:Mingo/controls/skin_settings_button_2state.xml">
             <SetVariable name="text">Key (Match Indicator)</SetVariable>
