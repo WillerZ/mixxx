@@ -4,12 +4,16 @@ Description:
   physical decks: the top deck renders its top half, the bottom deck
   its bottom half, zero line at the separator. In lock the pair reads
   as a single waveform; during a slip the other half shows the
-  deck's real-time position (snap-back reference). The pair label
-  ("1|3") is centred in a gutter spanning both lanes.
+  deck's real-time position (snap-back reference).
+  Each half-lane row carries its own deck-number gutter (pair_row.xml):
+  the number is vertically centred on its lane and the box inverts
+  while that deck slips. The separator between the lanes is pair
+  foreground when split, pair background when paired (calm = locked).
+  The manager confirms pair_enabled on both members together, so the
+  separator can read the top deck alone.
 Variables:
-  chanTop     : lower-numbered deck of the pair (label + header source)
-  chanBottom  : higher-numbered deck of the pair
-  LabelText   : pair label, e.g. "1|3"
+  chanTop     : lower-numbered deck of the pair (top lane)
+  chanBottom  : higher-numbered deck of the pair (bottom lane)
   SignalColor_Pair / SignalBgColor_Pair : pair colours
 -->
 <Template>
@@ -22,64 +26,66 @@ Variables:
       <WidgetGroup>
         <ObjectName>MingoPairBox<Variable name="chanTop"/></ObjectName>
         <Style>
-          border: 1px solid <Variable name="SignalColor_Pair"/>;
+          /* Selector-scoped on purpose: a selector-less declaration
+             would cascade through the stylesheet to every child
+             widget (Qt quirk) and paint stray orange borders around
+             the gutter labels and separator pages. */
+          #MingoPairBox<Variable name="chanTop"/> {
+            border: 1px solid <Variable name="SignalColor_Pair"/>;
+          }
         </Style>
-        <Layout>horizontal</Layout>
+        <Layout>vertical</Layout>
         <SizePolicy>me,me</SizePolicy>
         <Children>
 
-          <WidgetGroup><!-- gutter -->
-            <Layout>vertical</Layout>
-            <SizePolicy>min,me</SizePolicy>
+          <Template src="skins:Mingo/pair_row.xml">
+            <SetVariable name="chanNum"><Variable name="chanTop"/></SetVariable>
+            <SetVariable name="waveHalf">top</SetVariable>
+            <SetVariable name="SlipKey">[Channel<Variable name="chanTop"/>],slip_enabled</SetVariable>
+            <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
+            <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
+            <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
+            <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
+            <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
+          </Template>
+
+          <WidgetStack><!-- separator: page 1 = paired (background colour),
+               split shows the pair foreground so the seam between the
+               two half-lanes is also the pair-state read-out -->
+            <Size>0me,1f</Size>
+            <currentpage>[Channel<Variable name="chanTop"/>],pair_enabled</currentpage>
             <Children>
-              <Label>
-                <ObjectName>MingoWaveLabel<Variable name="chanTop"/></ObjectName>
+              <WidgetGroup><!-- split: pair foreground -->
+                <ObjectName>MingoPairSep<Variable name="chanTop"/>Split</ObjectName>
                 <Style>
-                  WLabel {
-                    color: <Variable name="SignalColor_Pair"/>;
+                  #MingoPairSep<Variable name="chanTop"/>Split {
+                    background-color: <Variable name="SignalColor_Pair"/>;
                   }
                 </Style>
-                <Text><Variable name="LabelText"/></Text>
-                <Alignment>center</Alignment>
-                <Size>44f,1me</Size>
-              </Label>
-            </Children>
-          </WidgetGroup>
-
-          <WidgetGroup><!-- stacked half-lanes: one waveform split
-               across the pair — top half = top deck, bottom half =
-               bottom deck, zero line at the separator -->
-            <Layout>vertical</Layout>
-            <SizePolicy>me,me</SizePolicy>
-            <Children>
-
-              <Template src="skins:Mingo/pair_row.xml">
-                <SetVariable name="chanNum"><Variable name="chanTop"/></SetVariable>
-                <SetVariable name="waveHalf">top</SetVariable>
-                <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
-                <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
-                <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
-                <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
-                <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
-              </Template>
-
-              <WidgetGroup><!-- separator between pair rows -->
-                <ObjectName>MingoPairSep</ObjectName>
                 <Size>0me,1f</Size>
               </WidgetGroup>
-
-              <Template src="skins:Mingo/pair_row.xml">
-                <SetVariable name="chanNum"><Variable name="chanBottom"/></SetVariable>
-                <SetVariable name="waveHalf">bottom</SetVariable>
-                <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
-                <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
-                <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
-                <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
-                <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
-              </Template>
-
+              <WidgetGroup><!-- paired: pair background -->
+                <ObjectName>MingoPairSep<Variable name="chanTop"/>Paired</ObjectName>
+                <Style>
+                  #MingoPairSep<Variable name="chanTop"/>Paired {
+                    background-color: <Variable name="SignalBgColor_Pair"/>;
+                  }
+                </Style>
+                <Size>0me,1f</Size>
+              </WidgetGroup>
             </Children>
-          </WidgetGroup>
+          </WidgetStack>
+
+          <Template src="skins:Mingo/pair_row.xml">
+            <SetVariable name="chanNum"><Variable name="chanBottom"/></SetVariable>
+            <SetVariable name="waveHalf">bottom</SetVariable>
+            <SetVariable name="SlipKey">[Channel<Variable name="chanBottom"/>],slip_enabled</SetVariable>
+            <SetVariable name="SignalBgColor"><Variable name="SignalBgColor_Pair"/></SetVariable>
+            <SetVariable name="SignalColor"><Variable name="SignalColor_Pair"/></SetVariable>
+            <SetVariable name="SignalRGBLowColor">#ff2a00</SetVariable>
+            <SetVariable name="SignalRGBMidColor">#33f600</SetVariable>
+            <SetVariable name="SignalRGBHighColor">#332acc</SetVariable>
+          </Template>
 
         </Children>
       </WidgetGroup>

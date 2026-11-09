@@ -790,6 +790,17 @@ QWidget* LegacySkinParser::parseWidgetStack(const QDomElement& node) {
     ControlObject* pCurrentPageControl = nullptr;
     ConfigKey currentPageConfigKey;
     QString currentpage_co = node.attribute("currentpage");
+    if (currentpage_co.length() == 0) {
+        // Alternative form: a <currentpage> child element carrying a
+        // <ConfigKey>. Like every other config-key element its text is
+        // resolved through the context, so <Variable> children expand --
+        // unlike the attribute form, which QDomElement reads verbatim.
+        QDomElement currentPageElement =
+                SkinContext::selectElement(node, "currentpage");
+        if (!currentPageElement.isNull()) {
+            currentpage_co = m_pContext->nodeToString(currentPageElement);
+        }
+    }
     if (currentpage_co.length() > 0) {
         ConfigKey configKey = ConfigKey::parseCommaSeparated(currentpage_co);
         bool persist = m_pContext->selectAttributeBool(node, "persist", false);

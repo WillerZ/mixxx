@@ -1,20 +1,72 @@
 <!--
 Description:
-  Mingo: one half-lane of a pair's split waveform — the zoomed
-  scrolling waveform restricted to one half (waveHalf: top|bottom).
-  The tap-to-scan overview is once per pair, in the header
-  (deck_text_big.xml).
+  Mingo: one half-lane of a pair's split waveform — a deck-number
+  gutter box and the zoomed scrolling waveform restricted to one half
+  (waveHalf: top|bottom). Keeping the gutter inside the row ties its
+  height to the waveform automatically: the deck number sits
+  vertically centred on its own half-lane. While the deck is slipping
+  the number box inverts (text/background swap), so slip stays
+  readable on the screen even when the controller is illuminating the
+  other deck of the pair.
+  The slip key arrives as a variable (full ConfigKey string) and is
+  consumed through the currentpage CHILD element, which — unlike the
+  attribute form — resolves <Variable> references, so one template
+  serves both pairs.
 Variables:
-  chanNum   : channel number
+  chanNum   : channel number (label text)
   waveHalf  : "top" or "bottom" half of the waveform
+  SlipKey   : e.g. [Channel1],slip_enabled
   SignalBgColor / SignalColor : pair colours
 -->
 <Template>
   <WidgetGroup>
     <ObjectName>MingoPairRow</ObjectName>
-    <Layout>vertical</Layout>
+    <Layout>horizontal</Layout>
     <SizePolicy>me,me</SizePolicy>
     <Children>
+
+      <WidgetStack><!-- deck number box: page 1 = slipping (inverted) -->
+        <Size>44f,1me</Size>
+        <currentpage><Variable name="SlipKey"/></currentpage>
+        <Children>
+          <WidgetGroup><!-- normal -->
+            <Style>
+              WLabel#MingoWaveLabel<Variable name="chanNum"/> {
+                color: <Variable name="SignalColor"/>;
+                background-color: <Variable name="SignalBgColor"/>;
+              }
+            </Style>
+            <Layout>vertical</Layout>
+            <SizePolicy>me,me</SizePolicy>
+            <Children>
+              <Label>
+                <ObjectName>MingoWaveLabel<Variable name="chanNum"/></ObjectName>
+                <Text><Variable name="chanNum"/></Text>
+                <Alignment>center</Alignment>
+                <Size>44f,1me</Size>
+              </Label>
+            </Children>
+          </WidgetGroup>
+          <WidgetGroup><!-- slipping: colours inverted -->
+            <Style>
+              WLabel#MingoWaveLabel<Variable name="chanNum"/> {
+                color: <Variable name="SignalBgColor"/>;
+                background-color: <Variable name="SignalColor"/>;
+              }
+            </Style>
+            <Layout>vertical</Layout>
+            <SizePolicy>me,me</SizePolicy>
+            <Children>
+              <Label>
+                <ObjectName>MingoWaveLabel<Variable name="chanNum"/></ObjectName>
+                <Text><Variable name="chanNum"/></Text>
+                <Alignment>center</Alignment>
+                <Size>44f,1me</Size>
+              </Label>
+            </Children>
+          </WidgetGroup>
+        </Children>
+      </WidgetStack>
 
       <Template src="skins:Mingo/wave_zoomed.xml">
         <SetVariable name="chanNum"><Variable name="chanNum"/></SetVariable>

@@ -1539,19 +1539,21 @@ WRateRange {
     font-size: 11px;
 }
 
-/* Pair box border + gutter label colour now come from deck_pair_waveform.xml,
- * where the pair's SignalColor_Pair is resolved per template instance. */
+/* Pair box border, the lane separator and the gutter number boxes'
+ * colours come from deck_pair_waveform.xml / pair_row.xml, where the
+ * pair's SignalColor_Pair is resolved per template instance and the
+ * slip / pair states swap the pages of the bound WidgetStacks. */
 
-  /* Gutter label spans both pair rows, rotated upright, colour = pair */
+  /* Gutter number boxes: one per lane, inside the lane row so the
+   * number is vertically centred on its half of the pair waveform.
+   * Text colour = pair colour normally, inverted while that deck
+   * slips (inline <Style> pages). */
   WLabel#MingoWaveLabel1,
-  WLabel#MingoWaveLabel2 {
+  WLabel#MingoWaveLabel2,
+  WLabel#MingoWaveLabel3,
+  WLabel#MingoWaveLabel4 {
     font-size: 18px/18px;
     font-weight: bold;
-    background-color: transparent;
-    }
-
-  #MingoPairSep {
-    background-color: #4a4a4a;
     }
 
   /* Beat FX: the current slot's effect name in the topbar. Which of
