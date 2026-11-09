@@ -701,6 +701,12 @@ co_dump baseline: only new `[ChannelN]` key is `pair_enabled`).
 10. **CPU/memory**: two static `EnginePairTransport` instances; proxies ≈ bridge-table size
     per pair (mirror list kept minimal via per-deck recomputation §5.4.6); zero per-callback
     allocations (POD snapshot).
+11. **OUTSTANDING — relay-side slip asymmetry** (9.20): the relay gates on the *follower's*
+    slip only (9.11 m), while the mirror gates on both members (9.16). A transport gesture
+    made on a **non-slipping follower while the leader slips** is relayed ungated, and the
+    leader executes it under its own slip semantics: the leader's slip lane is disturbed
+    and the pair transport never seeks (bench report 2026-11-09, decks 1/3 and 2/4).
+    Diagnosed; **fix not attempted**; options recorded in 9.20; test T46 reserved.
 
 ### 9.11 Phase 2 implementation notes (transport lock, landed; deviations from the plan)
 
@@ -1496,6 +1502,83 @@ grid is attached after all four tracks load, and the stereo reference wav
 (double-registration and quantize asserts on non-fixture paths, the RubberBand
 singleton outside the fixture) — verified failing identically at the branch
 head without these changes; not introduced by 9.19.
+
+### 9.20 Bench round 8 (SC Live 4) — follower seeks while the leader slips: the relay-side slip asymmetry — **OUTSTANDING (diagnosed, no fix attempted)**
+
+**Symptom (the DJ's bench report, 2026-11-09).** Decks 1/3 paired (deck 1 =
+initiator = leader), **deck 1 slipping**; dragging the **lower** waveform lane
+(deck 3, the *non*-slipping follower) should seek the pair transport, but
+instead disturbed **deck 1's slip state** — the leader's audible plane wandered
+under the drag and snapped back on slip release, while the pair plane (and
+deck 3's own lane, which rides it) never moved. Pair 2/4 behaves identically,
+confirming the bug is structural to the bridge, not deck-specific state.
+Control case as-expected: when **deck 3 alone** slips, the two halves drag
+independently — the 9.11 m gate keeps the gesture local.
+
+**Skin layer cleared first (as reported).** The lower lane binds only its own
+deck: `wave_zoomed.xml` gives its viewer `<Channel><Variable name="chanNum"/>
+</Channel>` (chanBottom = 3 through `pair_row.xml` / `deck_pair_waveform.xml`),
+and the WaveHalf feature is render-only (projYOffset/virtualHeight), mouse
+routing untouched. The drag is a **scratch, not a seek**:
+`WWaveformViewer::mousePress/Move` write `scratch_position` +
+`scratch_position_enable` to `[Channel3]` (`wwaveformviewer.cpp:79–150`).
+
+**Root cause.** `scratch_position(_enable)` are plain value copies in the
+follower→leader bridge (§5.5), so the drag re-emits onto `[Channel1]`'s scratch
+controls — correct for the bridge. The gap is that the **slip gates are
+asymmetric**: `slotBridgeRelay` halts only for the *follower's* slip (9.11 m)
+and the follower's quit-and-adopt window, and its deferred-delivery re-check
+re-runs only those; `slotBridgeMirror` gates on the follower (9.11 m) *and* the
+leader (9.16). There is **no leader-slip gate on the relay path**. So deck 1 —
+a live slipping deck under R8 — executes the pair command under its own slip
+semantics: the scratch moves the leader's **audible** plane only; the slip
+plane keeps advancing untouched (`processSlip`, `enginebuffer.cpp:1546+`), and
+while the leader slips the pair plane publishes from that slip plane with
+`scratching = false` (5.2) — so nothing underlying sees the gesture, and slip
+release `seekExact(m_slipPos)` rewinds the audible wander (1558). Net: zero
+pair seek, a disturbed leader slip lane, an inert follower lane. Exactly the
+9.16 shape (a slipping leader treated by leader-local semantics) on the side
+9.16 did not patch.
+
+**Scope: broader than the waveform.** Every relayed transport-family command
+(beatjump, cue seek, scratch2) hitting a slipping leader degrades to an
+audible-only slip gesture the same way; the waveform drag is simply the
+loudest instance.
+
+**Design-coverage gap.** T27 covers the *leader's own* slip+scratch, R8/5.2
+cover the pair plane's slip-plane feed, and 9.16 fixed the mirror side — no
+rule or test covers **a non-slipping follower's transport gesture while the
+leader slips**.
+
+**Key trace finding (kills the naive fix).** An ordinary seek while slipping
+does **not** move the slip marker in this codebase: no `m_slipPos` assignment
+has a seek hook (`enginebuffer.cpp` — rising edge 1551, fall 1558, follower
+feed 1612, advances 1640/1649). "Convert the relay to a leader seek" therefore
+fixes nothing on its own.
+
+**Proposed fix options (neither attempted as of this writing).**
+
+- **A — pair-aware slip seek (recommended).** While `pLeaderSlipEnabled`, the
+  relay translates the follower's scratch-family commands into a **slip-plane
+  seek on the leader** — moving `m_slipPos`, which *is* the pair plane while
+  the leader slips (5.2). The follower visibly seeks (it rides the pair plane),
+  the leader's audible slip wanders untouched (R8), and slip release rejoins
+  the moved plane. Needs a small engine primitive, e.g.
+  `EngineBuffer::requestSlipSeek(FramePos)` — an atomic consumed in
+  `processSlip`, made loop-aware with `adjustedPositionForCurrentLoopOrRepeat`
+  like the slip advance — because no existing control path moves the slip
+  marker. Generalizes later to beatjump/cue relays.
+- **B — minimal stopgap: symmetric gate.** Extend the 9.11 m/9.16 pattern to
+  the relay: while the leader slips, drop the scratch/seek-family relays (and
+  their deferred-delivery re-checks). Deck 1's slip state stops getting
+  clobbered; the cost is the follower's drag goes inert rather than seeking
+  while the leader slips. No engine changes.
+
+**Test reserved: T46** — "follower scratches while the leader slips": under A,
+assert the pair plane follows the drag target and slip release lands on the
+moved plane; under B, assert bit-identical pair plane and an undisturbed leader
+audible plane; either way, assert no slip state is fabricated on the follower
+(R8).
 
 ## 10. Explicitly out of scope
 
