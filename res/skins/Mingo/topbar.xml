@@ -33,13 +33,13 @@ Description:
                 <NumberStates>2</NumberStates>
                 <State>
                   <Number>0</Number>
-                  <Pressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24_grey.svg</Pressed>
-                  <Unpressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24_grey.svg</Unpressed>
+                  <Pressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24_grey.png</Pressed>
+                  <Unpressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24_grey.png</Unpressed>
                 </State>
                 <State>
                   <Number>1</Number>
-                  <Pressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24.svg</Pressed>
-                  <Unpressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24.svg</Unpressed>
+                  <Pressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24.png</Pressed>
+                  <Unpressed scalemode="STRETCH_ASPECT">skins:Mingo/graphics/logo_102x24.png</Unpressed>
                 </State>
                 <Connection>
                   <ConfigKey>[Mingo],colorLogo</ConfigKey>

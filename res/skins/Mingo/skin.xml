@@ -83,7 +83,7 @@
         background-color: #031F1E;
       }
       QLabel {
-        image: url(skins:Mingo/graphics/logo_160x40.svg);
+        image: url(skins:Mingo/graphics/logo_160x40.png);
         padding: 0;
         margin: 0px 2px 0px 2px;
         border: none;
@@ -211,7 +211,6 @@
                   <Children>
                     <!-- regular library
                         [stacked  waveforms]
-                        [decks, FX, samplers, Mic/Aux]
                         [Library] -->
                     <Splitter>
                       <ObjectName>WaveformSplitter</ObjectName>
